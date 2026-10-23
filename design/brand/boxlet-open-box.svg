@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+<title>Boxlet parcel</title>
+<desc>Dimetric parcel with parallel edges and a single white sealing strip.</desc>
+<defs>
+<linearGradient id="left" x2="0.7" y2="1"><stop stop-color="#8BB9DE"/><stop offset="1" stop-color="#76A9D2"/></linearGradient>
+<linearGradient id="right" x2="0.7" y2="1"><stop stop-color="#6094C0"/><stop offset="1" stop-color="#487EAC"/></linearGradient>
+<linearGradient id="interior" x2="0.7" y2="1"><stop stop-color="#416D94"/><stop offset="1" stop-color="#416D94"/></linearGradient>
+<linearGradient id="rearLid" x2="0.7" y2="1"><stop stop-color="#C3DFF3"/><stop offset="1" stop-color="#ABCFEA"/></linearGradient>
+<linearGradient id="frontLid" x2="0.7" y2="1"><stop stop-color="#C3DFF3"/><stop offset="1" stop-color="#ABCFEA"/></linearGradient>
+<clipPath id="body"><path d="M52.8408,24.3396 Q54.0000,23.7600 55.1592,24.3396 L85.2408,39.3804Q86.4000,39.9600 86.4000,41.2560 L86.4000,73.2240Q86.4000,74.5200 85.2408,75.0996 L55.1592,90.1404Q54.0000,90.7200 52.8408,90.1404 L22.7592,75.0996Q21.6000,74.5200 21.6000,73.2240 L21.6000,41.2560Q21.6000,39.9600 22.7592,39.3804Z"/></clipPath>
+</defs>
+<path d="M21.6000,39.9600 Q21.6000,39.9600 21.6000,39.9600 L54.0000,56.1600Q54.0000,56.1600 54.0000,56.1600 L54.0000,90.7200Q54.0000,90.7200 54.0000,90.7200 L21.6000,74.5200Q21.6000,74.5200 21.6000,74.5200Z" fill="url(#left)" clip-path="url(#body)"/>
+<path d="M54.0000,56.1600 Q54.0000,56.1600 54.0000,56.1600 L86.4000,39.9600Q86.4000,39.9600 86.4000,39.9600 L86.4000,74.5200Q86.4000,74.5200 86.4000,74.5200 L54.0000,90.7200Q54.0000,90.7200 54.0000,90.7200Z" fill="url(#right)" clip-path="url(#body)"/>
+<path d="M54.0000,23.7600 Q54.0000,23.7600 54.0000,23.7600 L86.4000,39.9600Q86.4000,39.9600 86.4000,39.9600 L54.0000,56.1600Q54.0000,56.1600 54.0000,56.1600 L21.6000,39.9600Q21.6000,39.9600 21.6000,39.9600Z" fill="url(#interior)" clip-path="url(#body)"/>
+<path d="M54.1882,22.9167 Q54.0000,23.7600 54.7728,24.1464 L85.6272,39.5736Q86.4000,39.9600 86.5882,39.1167 L90.4047,22.0156Q90.5929,21.1724 89.8201,20.7860 L58.9657,5.3588Q58.1929,4.9724 58.0047,5.8156Z" fill="url(#rearLid)"/>
+<path d="M21.3614,39.1296 Q21.6000,39.9600 22.3728,40.3464 L53.2272,55.7736Q54.0000,56.1600 53.7614,55.3296 L50.0457,42.3956Q49.8071,41.5652 49.0343,41.1788 L18.1799,25.7516Q17.4071,25.3652 17.6457,26.1956Z" fill="url(#frontLid)"/>
+</svg>

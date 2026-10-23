@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+<title>Boxlet parcel</title>
+<desc>Dimetric parcel with parallel edges and a single white sealing strip.</desc>
+<defs>
+<linearGradient id="left" x2="0.7" y2="1"><stop stop-color="#8BB9DE"/><stop offset="1" stop-color="#76A9D2"/></linearGradient>
+<linearGradient id="right" x2="0.7" y2="1"><stop stop-color="#6094C0"/><stop offset="1" stop-color="#487EAC"/></linearGradient>
+<linearGradient id="interior" x2="0.7" y2="1"><stop stop-color="#416D94"/><stop offset="1" stop-color="#416D94"/></linearGradient>
+<linearGradient id="rearLid" x2="0.7" y2="1"><stop stop-color="#C3DFF3"/><stop offset="1" stop-color="#ABCFEA"/></linearGradient>
+<linearGradient id="frontLid" x2="0.7" y2="1"><stop stop-color="#C3DFF3"/><stop offset="1" stop-color="#ABCFEA"/></linearGradient>
+<linearGradient id="topTape" x2="0.7" y2="1"><stop stop-color="#F4F8FC"/><stop offset="1" stop-color="#F4F8FC"/></linearGradient>
+<linearGradient id="frontTape" x2="0.7" y2="1"><stop stop-color="#F4F8FC"/><stop offset="1" stop-color="#F4F8FC"/></linearGradient>
+<clipPath id="body"><path d="M52.8408,24.3396 Q54.0000,23.7600 55.1592,24.3396 L85.2408,39.3804Q86.4000,39.9600 86.4000,41.2560 L86.4000,73.2240Q86.4000,74.5200 85.2408,75.0996 L55.1592,90.1404Q54.0000,90.7200 52.8408,90.1404 L22.7592,75.0996Q21.6000,74.5200 21.6000,73.2240 L21.6000,41.2560Q21.6000,39.9600 22.7592,39.3804Z"/></clipPath>
+</defs>
+<rect width="108" height="108" rx="24" fill="#FAFCFF"/>
+<g transform="translate(54 54) scale(0.76) translate(-54 -57.2400)">
+<path d="M21.6000,39.9600 Q21.6000,39.9600 21.6000,39.9600 L54.0000,56.1600Q54.0000,56.1600 54.0000,56.1600 L54.0000,90.7200Q54.0000,90.7200 54.0000,90.7200 L21.6000,74.5200Q21.6000,74.5200 21.6000,74.5200Z" fill="url(#left)" clip-path="url(#body)"/>
+<path d="M54.0000,56.1600 Q54.0000,56.1600 54.0000,56.1600 L86.4000,39.9600Q86.4000,39.9600 86.4000,39.9600 L86.4000,74.5200Q86.4000,74.5200 86.4000,74.5200 L54.0000,90.7200Q54.0000,90.7200 54.0000,90.7200Z" fill="url(#right)" clip-path="url(#body)"/>
+<path d="M54.0000,23.7600 Q54.0000,23.7600 54.0000,23.7600 L86.4000,39.9600Q86.4000,39.9600 86.4000,39.9600 L54.0000,56.1600Q54.0000,56.1600 54.0000,56.1600 L21.6000,39.9600Q21.6000,39.9600 21.6000,39.9600Z" fill="url(#interior)" clip-path="url(#body)"/>
+<path d="M54.0000,23.7600 Q54.0000,23.7600 54.0000,23.7600 L86.4000,39.9600Q86.4000,39.9600 86.4000,39.9600 L70.2000,48.0600Q70.2000,48.0600 70.2000,48.0600 L37.8000,31.8600Q37.8000,31.8600 37.8000,31.8600Z" fill="url(#rearLid)" clip-path="url(#body)"/>
+<path d="M21.6000,39.9600 Q21.6000,39.9600 21.6000,39.9600 L54.0000,56.1600Q54.0000,56.1600 54.0000,56.1600 L70.2000,48.0600Q70.2000,48.0600 70.2000,48.0600 L37.8000,31.8600Q37.8000,31.8600 37.8000,31.8600Z" fill="url(#frontLid)" clip-path="url(#body)"/>
+<path d="M67.0596,30.6762 Q67.4460,30.4830 67.8324,30.6762 L72.5676,33.0438Q72.9540,33.2370 72.5676,33.4302 L40.9404,49.2438Q40.5540,49.4370 40.1676,49.2438 L35.4324,46.8762Q35.0460,46.6830 35.4324,46.4898Z" fill="url(#topTape)" clip-path="url(#body)"/>
+<path d="M35.0460,47.1150 Q35.0460,46.6830 35.4324,46.8762 L40.1676,49.2438Q40.5540,49.4370 40.5540,49.8690 L40.5540,62.1378Q40.5540,62.5698 40.1676,62.3766 L35.4324,60.0090Q35.0460,59.8158 35.0460,59.3838Z" fill="url(#frontTape)" clip-path="url(#body)"/>
+</g>
+</svg>

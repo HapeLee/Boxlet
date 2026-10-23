@@ -1,0 +1,45 @@
+# Build a portable x64 release with .NET, WinUI and an OpenJDK runtime.
+param([string]$JavaHome)
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Resolve-DotNet.ps1')
+$dotnet = Resolve-BoxletDotNet
+if (-not $JavaHome) {
+    $gradleHome = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE '.gradle' }
+    $jdk = Get-ChildItem -LiteralPath (Join-Path $gradleHome 'jdks') -Directory -Filter 'eclipse_adoptium*' -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'bin/jlink.exe') } | Select-Object -First 1
+    if ($jdk) { $JavaHome = $jdk.FullName }
+}
+if (-not $JavaHome -or -not (Test-Path -LiteralPath (Join-Path $JavaHome 'bin/jlink.exe'))) {
+    throw 'Pass -JavaHome with an x64 OpenJDK JDK directory containing bin/jlink.exe. Use a JDK whose license permits redistribution.'
+}
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$destination = Join-Path $root "artifacts/Boxlet-windows-x64-$stamp"
+Push-Location $root
+try {
+    & .\gradlew.bat :engine-host:installDist --console=plain
+    if ($LASTEXITCODE) { throw 'Engine build failed.' }
+    & $dotnet publish windowsApp/Boxlet.Windows.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained true -o $destination --nologo
+    if ($LASTEXITCODE) { throw 'Publish failed.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $destination 'Boxlet.Windows.pri'))) {
+        throw 'Published WinUI resource index is missing.'
+    }
+    & (Join-Path $JavaHome 'bin/jlink.exe') --module-path (Join-Path $JavaHome 'jmods') --add-modules java.se,jdk.crypto.ec,jdk.unsupported,jdk.zipfs --strip-debug --no-header-files --no-man-pages --output (Join-Path $destination 'runtime')
+    if ($LASTEXITCODE) { throw 'Bundled Java runtime creation failed.' }
+    @'
+Boxlet - Windows x64 portable release
+
+Extract the entire folder, then open Boxlet.Windows.exe.
+No .NET SDK, .NET Runtime, Windows App SDK or Java installation is needed.
+Windows 11 22H2 or newer is required.
+Keep the DLLs, Assets, engine, runtime and legal files with the executable.
+Close hides to the notification-area tray. Right-click the tray icon to exit.
+Do not run this and the old Compose desktop client at the same time.
+
+Third-party notices: see runtime/legal and ThirdPartyNotices.* where provided.
+'@ | Set-Content -LiteralPath (Join-Path $destination 'START-HERE.txt') -Encoding ascii
+    $archive = "$destination.zip"
+    Compress-Archive -Path $destination -DestinationPath $archive -CompressionLevel Optimal
+    Write-Host "Portable folder: $destination"
+    Write-Host "Release archive: $archive"
+} finally { Pop-Location }

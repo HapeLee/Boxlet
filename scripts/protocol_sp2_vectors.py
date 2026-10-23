@@ -1,0 +1,117 @@
+"""Generate protocol-design fixtures; this is not a production SP/2 codec.
+
+Run from any directory: python scripts/protocol_sp2_vectors.py [--check]
+Uses only the Python standard library. --check does not modify files.
+"""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import struct
+
+
+CHUNK = 1048576
+TARGET = Path(__file__).resolve().parents[1] / "docs" / "protocol" / "sp2-vectors.json"
+
+
+def sha(data):
+    return hashlib.sha256(data).digest()
+
+
+def hashes(data):
+    return [sha(data[i:i + CHUNK]) for i in range(0, len(data), CHUNK)]
+
+
+def root(data):
+    return sha(b"sendee-file-v2\0" + struct.pack(">QI", len(data), CHUNK) + b"".join(hashes(data))).hex()
+
+
+def prefix_root(data, retained_chunks):
+    return sha(b"sendee-prefix-v2\0" + struct.pack(">QIQ", len(data), CHUNK, retained_chunks)
+               + b"".join(hashes(data)[:retained_chunks])).hex()
+
+
+def string(data):
+    encoded = data.encode("utf-8")
+    return struct.pack(">I", len(encoded)) + encoded
+
+
+def canonical_entry(entry):
+    return (struct.pack(">B", {"file": 1, "directory": 2, "text": 3}[entry["kind"]])
+            + bytes.fromhex(entry["fileId"]) + struct.pack(">Q", int(entry["size"]))
+            + b"".join(string(entry.get(key, "")) for key in ("path", "mime", "modified", "preview")))
+
+
+def frame(kind, stream_id, offset, sequence, payload):
+    header = struct.pack(">4sBBHIIQQ", b"SND2", kind, 0, 32, stream_id, len(payload), offset, sequence)
+    assert len(header) == 32
+    result = header + payload
+    # Validate the field offsets independently with slices, including payload length.
+    assert result[:4] == b"SND2" and int.from_bytes(result[6:8], "big") == 32
+    assert int.from_bytes(result[8:12], "big") == stream_id
+    assert int.from_bytes(result[12:16], "big") == len(result) - 32
+    assert int.from_bytes(result[16:24], "big") == offset
+    assert int.from_bytes(result[24:32], "big") == sequence
+    return result.hex()
+
+
+def generate():
+    ping = {"type": "ping", "requestId": "00000000000000000000000000000001"}
+    ping_bytes = json.dumps(ping, separators=(",", ":")).encode("utf-8")
+    batch = struct.pack(">HH", 2, 0)
+    for stream_id, content in ((1, b"a"), (3, b"bc")):
+        batch += struct.pack(">IQI", stream_id, 0, len(content)) + sha(content) + content
+    entries = [
+        {"kind": "file", "fileId": "00000000000000000000000000000001", "size": "3",
+         "path": "hello.txt", "mime": "text/plain", "modified": "2026-10-23T00:00:00.000Z"},
+        {"kind": "directory", "fileId": "00000000000000000000000000000002", "size": "0", "path": "照片"},
+        {"kind": "text", "fileId": "00000000000000000000000000000003", "size": "3",
+         "path": "message.txt", "mime": "text/plain", "preview": "你好"},
+    ]
+    cases = [
+        ("empty", {"utf8": ""}, b""),
+        ("abc", {"utf8": "abc"}, b"abc"),
+        ("one-full-chunk", {"repeatByte": 7, "repeatCount": CHUNK}, bytes([7]) * CHUNK),
+        ("two-chunks", {"repeatByte": 7, "repeatCount": CHUNK, "suffixUtf8": "abc"},
+         bytes([7]) * CHUNK + b"abc"),
+    ]
+    canonical = b"sendee-manifest-v2\0" + b"".join(map(canonical_entry, entries))
+    return {
+        "protocol": "sendee/2", "version": "2.0",
+        "note": "Each frame fixture starts a separate direction at sequence 1. Hex is lowercase.",
+        "frames": [
+            {"name": "control-ping", "jsonPayload": ping,
+             "hex": frame(1, 0, 0, 1, ping_bytes)},
+            {"name": "data-abc", "streamId": 1, "offset": "0", "fileUtf8": "abc",
+             "hex": frame(2, 1, 0, 1, sha(b"abc") + b"abc")},
+            {"name": "batch-two-files", "records": [{"streamId": 1, "utf8": "a"},
+                                                       {"streamId": 3, "utf8": "bc"}],
+             "hex": frame(3, 0, 0, 1, batch)},
+        ],
+        "files": [{"name": name, "source": source, "size": str(len(data)),
+                   "chunkSha256": [value.hex() for value in hashes(data)], "contentRoot": root(data),
+                   "prefixRoots": [{"retainedChunks": str(n), "prefixRoot": prefix_root(data, n)}
+                                   for n in range(len(hashes(data)) + 1)]}
+                  for name, source, data in cases],
+        "manifest": {"entries": entries, "canonicalHex": canonical.hex(), "manifestHash": sha(canonical).hex()},
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    payload = json.dumps(generate(), ensure_ascii=False, indent=2) + "\n"
+    if args.check:
+        if not TARGET.exists() or TARGET.read_text(encoding="utf-8") != payload:
+            raise SystemExit("SP/2 vectors differ: regenerate and review the wire specification.")
+        print("SP/2 design vectors match: 3 frames, 4 file cases, 1 manifest.")
+    else:
+        TARGET.parent.mkdir(parents=True, exist_ok=True)
+        TARGET.write_text(payload, encoding="utf-8", newline="\n")
+        print(f"Wrote {TARGET}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,21 @@
+{
+  "top": [0.5, 0.22],
+  "axisU": [0.3, 0.15],
+  "axisV": [-0.3, 0.15],
+  "height": 0.32,
+  "iconScale": 0.76,
+  "openAngle": 105,
+  "tapeHalfWidth": 0.085,
+  "palette": {
+    "top": "#C3DFF3",
+    "topShade": "#ABCFEA",
+    "left": "#8BB9DE",
+    "leftShade": "#76A9D2",
+    "right": "#6094C0",
+    "rightShade": "#487EAC",
+    "interior": "#416D94",
+    "tape": "#F4F8FC",
+    "edge": "#497DA9",
+    "background": "#FAFCFF"
+  }
+}

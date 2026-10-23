@@ -1,0 +1,23 @@
+.gradle/
+build/
+*/build/
+local.properties
+# 正式签名材料，绝不能提交
+keystore.properties
+*.jks
+*.keystore
+.idea/
+*.iml
+.kotlin/
+.tmp/
+captures/
+.DS_Store
+*.log
+artifacts/
+# 打包产物（APK / AAB / mapping 等）
+androidApp/release/
+*/release/
+*.apk
+*.aab
+mapping.txt
+output-metadata.json
