@@ -11,12 +11,13 @@ plugins {
 // ---------------------------------------------------------------------------
 // 统一版本号
 //
-// 唯一来源是 git tag：vMAJOR.MINOR.PATCH[.TWEAK]。数值编码与 Matter 的
-// SoftwareVersion 一致，高位起每 8 位一个字段：
+// 唯一来源是 git tag：vMAJOR.MINOR.PATCH[.TWEAK]。数值用十进制拼接，每段固定 2 位：
 //
-//   code = (major shl 24) or (minor shl 16) or (patch shl 8) or tweak
+//   code = major * 1_000_000 + minor * 10_000 + patch * 100 + tweak
 //
-// 例：v1.2.3 -> 0x01020300 -> 16909056，v1.2.3.4 -> 0x01020304。
+// 例：v1.2.3 -> 1020300，v1.2.3.4 -> 1020304，v1.0.0 -> 1000000。
+// 作用与 Android 的 versionCode 一致：随版本单调递增，段位一眼能对上版本名。
+// 每段上限 99，最大值 99999999，远低于 Android 的 2100000000。
 // tag 之后的提交与本地脏工作区只改变展示用的后缀（-dev.N+gHASH[.dirty]），
 // 不改变数值版本号；正式发布必须打在干净的 tag 上。
 //
@@ -40,8 +41,8 @@ class BoxletVersionInfo(
     /** 精确构建在干净 tag 上。 */
     val release: Boolean = tagged && distance == 0 && !dirty
 
-    /** Matter 风格 32 位软件版本号，Android versionCode 直接用它。 */
-    val code: Int = (major shl 24) or (minor shl 16) or (patch shl 8) or tweak
+    /** 十进制拼接的数值版本号，Android versionCode 直接用它。 */
+    val code: Int = major * 1_000_000 + minor * 10_000 + patch * 100 + tweak
 
     /** 对内展示的完整版本号：发布版 1.2.3，开发构建 1.2.3-dev.7+ga1b2c3d。 */
     val display: String = when {
@@ -107,12 +108,16 @@ fun resolveBoxletVersion(): BoxletVersionInfo {
         }
     }
 
-    // Android 的 versionCode 是 32 位有符号整数且上限 2100000000。
-    require(info.major in 0..125) {
-        "major 必须 ≤ 125：Android versionCode 会溢出（当前 ${info.semver} → ${info.code}）"
-    }
-    listOf("minor" to info.minor, "patch" to info.patch, "tweak" to info.tweak).forEach { (name, value) ->
-        require(value in 0..255) { "$name 必须 ≤ 255（当前 $value）：Matter 的版本号每个字段占一个字节" }
+    // 十进制拼接每段固定 2 位，因此每段最多 99；最大值 99999999 仍在 Android 的上限之内。
+    listOf(
+        "major" to info.major,
+        "minor" to info.minor,
+        "patch" to info.patch,
+        "tweak" to info.tweak,
+    ).forEach { (name, value) ->
+        require(value in 0..99) {
+            "$name 必须 ≤ 99（当前 $value）：versionCode 按每段 2 位十进制拼接，${info.semver} → ${info.code}"
+        }
     }
     return info
 }
