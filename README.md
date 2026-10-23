@@ -110,8 +110,8 @@ printf '{"id":"1","command":"status"}\n{"id":"2","command":"shutdown"}\n' \
 
 ## 版本号与发布
 
-版本号只有一个来源：git tag `vMAJOR.MINOR.PATCH[.TWEAK]`。数值按十进制拼接
-（`major*1_000_000 + minor*10_000 + patch*100 + tweak`，`v1.2.3` → `1020300`），
+版本号只有一个来源：git tag `vMAJOR.MINOR.PATCH`。数值按十进制拼接
+（`major*10_000 + minor*100 + patch`，`v1.0.0` → `10000`、`v1.2.3` → `10203`），
 Android `versionCode`、Windows `FileVersion`、安装包版本、桌面 `packageVersion` 和界面显示的
 版本全部由它推导；不在 tag 上的构建带 `-dev.N+gHASH` 后缀。详见
 [`docs/RELEASING.md`](docs/RELEASING.md)。

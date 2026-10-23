@@ -11,13 +11,15 @@ plugins {
 // ---------------------------------------------------------------------------
 // 统一版本号
 //
-// 唯一来源是 git tag：vMAJOR.MINOR.PATCH[.TWEAK]。数值用十进制拼接，每段固定 2 位：
+// 唯一来源是 git tag：vMAJOR.MINOR.PATCH（三段，不使用第 4 段）。数值用十进制拼接，
+// 每段固定 2 位：
 //
-//   code = major * 1_000_000 + minor * 10_000 + patch * 100 + tweak
+//   code = major * 10_000 + minor * 100 + patch
 //
-// 例：v1.2.3 -> 1020300，v1.2.3.4 -> 1020304，v1.0.0 -> 1000000。
+// 例：v0.1.0 -> 100，v1.0.0 -> 10000，v1.2.3 -> 10203。
 // 作用与 Android 的 versionCode 一致：随版本单调递增，段位一眼能对上版本名。
-// 每段上限 99，最大值 99999999，远低于 Android 的 2100000000。
+// 每段上限 99，最大值 999999，远低于 Android 的 2100000000。
+// 同一版本内的修订直接递增 patch（1.2.99 -> 1.3.0 依然单调）。
 // tag 之后的提交与本地脏工作区只改变展示用的后缀（-dev.N+gHASH[.dirty]），
 // 不改变数值版本号；正式发布必须打在干净的 tag 上。
 //
@@ -29,20 +31,19 @@ class BoxletVersionInfo(
     val major: Int,
     val minor: Int,
     val patch: Int,
-    val tweak: Int,
     val distance: Int,
     val commit: String,
     val dirty: Boolean,
     val tagged: Boolean,
 ) {
-    /** 纯数值版本：1.2.3，带 tweak 时为 1.2.3.4。 */
-    val semver: String = if (tweak == 0) "$major.$minor.$patch" else "$major.$minor.$patch.$tweak"
+    /** 纯数值版本：1.2.3。 */
+    val semver: String = "$major.$minor.$patch"
 
     /** 精确构建在干净 tag 上。 */
     val release: Boolean = tagged && distance == 0 && !dirty
 
     /** 十进制拼接的数值版本号，Android versionCode 直接用它。 */
-    val code: Int = major * 1_000_000 + minor * 10_000 + patch * 100 + tweak
+    val code: Int = major * 10_000 + minor * 100 + patch
 
     /** 对内展示的完整版本号：发布版 1.2.3，开发构建 1.2.3-dev.7+ga1b2c3d。 */
     val display: String = when {
@@ -67,22 +68,21 @@ fun boxletGit(vararg args: String): String? = try {
 
 fun resolveBoxletVersion(): BoxletVersionInfo {
     val pattern = Regex(
-        """^v?(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\.(\d{1,3}))?(?:-(\d+)-g([0-9a-fA-F]+))?(-dirty)?$""",
+        """^v?(\d{1,2})\.(\d{1,2})\.(\d{1,2})(?:-(\d+)-g([0-9a-fA-F]+))?(-dirty)?$""",
     )
     val requested = (providers.gradleProperty("boxletVersion").orNull
         ?: providers.environmentVariable("BOXLET_VERSION").orNull).nonBlank()
 
     fun parse(text: String, fallbackCommit: String?): BoxletVersionInfo {
         val match = pattern.matchEntire(text)
-            ?: throw GradleException("版本号格式非法：$text（期望 v1.2.3 或 v1.2.3.4）")
+            ?: throw GradleException("版本号格式非法：$text（期望 v主.次.修订 三段数字，每段 ≤ 99）")
         return BoxletVersionInfo(
             major = match.groupValues[1].toInt(),
             minor = match.groupValues[2].toInt(),
             patch = match.groupValues[3].toInt(),
-            tweak = match.groupValues[4].ifEmpty { "0" }.toInt(),
-            distance = match.groupValues[5].ifEmpty { "0" }.toInt(),
-            commit = match.groupValues[6].ifEmpty { fallbackCommit ?: "unknown" },
-            dirty = match.groupValues[7].isNotEmpty(),
+            distance = match.groupValues[4].ifEmpty { "0" }.toInt(),
+            commit = match.groupValues[5].ifEmpty { fallbackCommit ?: "unknown" },
+            dirty = match.groupValues[6].isNotEmpty(),
             tagged = true,
         )
     }
@@ -99,7 +99,6 @@ fun resolveBoxletVersion(): BoxletVersionInfo {
                 major = 0,
                 minor = 1,
                 patch = 0,
-                tweak = 0,
                 distance = 0,
                 commit = boxletGit("rev-parse", "--short=7", "HEAD") ?: "unknown",
                 dirty = false,
@@ -108,12 +107,11 @@ fun resolveBoxletVersion(): BoxletVersionInfo {
         }
     }
 
-    // 十进制拼接每段固定 2 位，因此每段最多 99；最大值 99999999 仍在 Android 的上限之内。
+    // 十进制拼接每段固定 2 位，因此每段最多 99；最大值 999999 远在 Android 的上限之内。
     listOf(
         "major" to info.major,
         "minor" to info.minor,
         "patch" to info.patch,
-        "tweak" to info.tweak,
     ).forEach { (name, value) ->
         require(value in 0..99) {
             "$name 必须 ≤ 99（当前 $value）：versionCode 按每段 2 位十进制拼接，${info.semver} → ${info.code}"

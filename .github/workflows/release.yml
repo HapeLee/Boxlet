@@ -1,6 +1,6 @@
 name: Release
 
-# 打 tag（v1.2.3 / v1.2.3.4）即触发：四端构建 -> 生成 GitHub Release -> 发 Telegram。
+# 打 tag（v主.次.修订，例如 v1.0.0）即触发：四端构建 -> 生成 GitHub Release -> 发 Telegram。
 # 版本号的唯一来源就是这个 tag，所有产物共用同一个版本号（Matter 风格编码，见根 build.gradle.kts）。
 
 on:
@@ -38,8 +38,8 @@ jobs:
           else
             version="${GITHUB_REF_NAME#v}"
           fi
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\.[0-9]{1,3})?$'; then
-            echo "版本号格式不正确：'$version'（期望 1.2.3 或 1.2.3.4）" >&2
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}$'; then
+            echo "版本号格式不正确：'$version'（期望 主.次.修订 三段数字，每段 ≤ 99，例如 1.0.0）" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
