@@ -80,7 +80,12 @@ jobs:
         run: |
           set -euo pipefail
           keystore="${RUNNER_TEMP}/boxlet-release.jks"
-          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "$keystore"
+          # 密钥以 base64 存在 Secret 里，可能带 CRLF / BOM，先清洗再解码
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" \
+            | tr -d '\r\n \t' \
+            | sed 's/^\xEF\xBB\xBF//' \
+            | base64 -d > "$keystore"
+          test -s "$keystore"
           {
             echo "BOXLET_KEYSTORE_PATH=${keystore}"
             echo "BOXLET_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
