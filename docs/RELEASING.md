@@ -110,7 +110,7 @@ git push origin v1.0.0
 | Secret | 必需 | 用途 |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | 发通知必需 | @BotFather 创建 bot 后拿到的 token |
-| `TELEGRAM_CHAT_ID` | 发通知必需 | 目标会话 id（私聊 / 群 / 频道；频道需把 bot 设为管理员） |
+| `TELEGRAM_CHAT_ID` | 发通知必需 | 目标会话 id，多个用逗号分隔（私聊 / 群 / 频道；频道需把 bot 设为管理员） |
 | `ANDROID_KEYSTORE_BASE64` | 可选 | release keystore 的 base64，配置后才产出已签名 APK/AAB |
 | `ANDROID_KEYSTORE_PASSWORD` | 可选 | keystore 口令 |
 | `ANDROID_KEY_ALIAS` | 可选 | 签名 key 别名 |
