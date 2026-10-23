@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.boxlet.core.BoxletBuild
 import dev.boxlet.core.engine.TransferStatus
 import dev.boxlet.core.protocol.Device
 import dev.boxlet.core.protocol.Protocol
@@ -634,7 +635,7 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
 
         item {
             SectionCard("关于") {
-                InfoLine("版本", "1.0.0")
+                InfoLine("版本", BoxletBuild.VERSION)
                 InfoLine("协议", "LocalSend v${Protocol.VERSION}")
                 InfoLine("设备指纹", "")
                 Text(

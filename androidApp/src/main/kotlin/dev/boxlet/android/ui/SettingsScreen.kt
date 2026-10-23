@@ -19,6 +19,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import dev.boxlet.android.BuildConfig
 import dev.boxlet.android.ui.components.EditableSettingItem
 import dev.boxlet.android.ui.components.GlassPage
 import dev.boxlet.android.ui.components.SettingCard
@@ -240,7 +241,7 @@ fun SettingsScreen(
             SettingGroup(title = "关于") {
                 SettingCard {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        InfoRow("版本", "1.0.0")
+                        InfoRow("版本", BuildConfig.VERSION_NAME)
                         InfoRow("协议", "LocalSend v${Protocol.VERSION}")
                         Text("设备指纹", style = MaterialTheme.typography.bodyMedium)
                         Text(

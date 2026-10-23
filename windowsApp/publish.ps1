@@ -1,6 +1,10 @@
 # Build a portable x64 release with .NET, WinUI and an OpenJDK runtime.
-param([string]$JavaHome)
+# 版本号默认取 $env:BOXLET_VERSION（CI 与 pack.ps1 都走这条路径），本地没设时用开发基线。
+param([string]$JavaHome, [string]$Version)
 $ErrorActionPreference = 'Stop'
+if (-not $Version) {
+    $Version = if ($env:BOXLET_VERSION) { $env:BOXLET_VERSION } else { '0.1.0' }
+}
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Resolve-DotNet.ps1')
 $dotnet = Resolve-BoxletDotNet
@@ -14,20 +18,20 @@ if (-not $JavaHome -or -not (Test-Path -LiteralPath (Join-Path $JavaHome 'bin/jl
     throw 'Pass -JavaHome with an x64 OpenJDK JDK directory containing bin/jlink.exe. Use a JDK whose license permits redistribution.'
 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$destination = Join-Path $root "artifacts/Boxlet-windows-x64-$stamp"
+$destination = Join-Path $root "artifacts/Boxlet-windows-x64-$Version-$stamp"
 Push-Location $root
 try {
     & .\gradlew.bat :engine-host:installDist --console=plain
     if ($LASTEXITCODE) { throw 'Engine build failed.' }
-    & $dotnet publish windowsApp/Boxlet.Windows.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained true -o $destination --nologo
+    & $dotnet publish windowsApp/Boxlet.Windows.csproj -c Release -p:Platform=x64 -p:Version=$Version -r win-x64 --self-contained true -o $destination --nologo
     if ($LASTEXITCODE) { throw 'Publish failed.' }
     if (-not (Test-Path -LiteralPath (Join-Path $destination 'Boxlet.Windows.pri'))) {
         throw 'Published WinUI resource index is missing.'
     }
     & (Join-Path $JavaHome 'bin/jlink.exe') --module-path (Join-Path $JavaHome 'jmods') --add-modules java.se,jdk.crypto.ec,jdk.unsupported,jdk.zipfs --strip-debug --no-header-files --no-man-pages --output (Join-Path $destination 'runtime')
     if ($LASTEXITCODE) { throw 'Bundled Java runtime creation failed.' }
-    @'
-Boxlet - Windows x64 portable release
+    @"
+Boxlet $Version - Windows x64 portable release
 
 Extract the entire folder, then open Boxlet.Windows.exe.
 No .NET SDK, .NET Runtime, Windows App SDK or Java installation is needed.
@@ -37,7 +41,7 @@ Close hides to the notification-area tray. Right-click the tray icon to exit.
 Do not run this and the old Compose desktop client at the same time.
 
 Third-party notices: see runtime/legal and ThirdPartyNotices.* where provided.
-'@ | Set-Content -LiteralPath (Join-Path $destination 'START-HERE.txt') -Encoding ascii
+"@ | Set-Content -LiteralPath (Join-Path $destination 'START-HERE.txt') -Encoding ascii
     $archive = "$destination.zip"
     Compress-Archive -Path $destination -DestinationPath $archive -CompressionLevel Optimal
     Write-Host "Portable folder: $destination"

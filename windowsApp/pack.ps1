@@ -7,9 +7,10 @@
 # Examples:
 #   .\windowsApp\pack.ps1
 #   .\windowsApp\pack.ps1 -Version 1.1.0 -JavaHome C:\path\to\temurin-jdk
-#   .\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-20261022-024934
+#   .\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-1.1.0-20261022-024934
+# 版本号默认取 $env:BOXLET_VERSION（CI 统一注入），本地没设时用开发基线。
 param(
-    [string]$Version = '1.0.0',
+    [string]$Version,
     [string]$JavaHome,
     [string]$Source,
     [string]$Iscc,
@@ -17,6 +18,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Version) {
+    $Version = if ($env:BOXLET_VERSION) { $env:BOXLET_VERSION } else { '0.1.0' }
+}
 $root = Split-Path $PSScriptRoot -Parent
 $artifacts = Join-Path $root 'artifacts'
 if (-not (Test-Path -LiteralPath $artifacts)) {

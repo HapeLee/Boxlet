@@ -108,6 +108,23 @@ printf '{"id":"1","command":"status"}\n{"id":"2","command":"shutdown"}\n' \
 
 输出包含 `{"event":"state",...}` 事件与 `{"id":"1","ok":true,...}` 响应。
 
+## 版本号与发布
+
+版本号只有一个来源：git tag `vMAJOR.MINOR.PATCH[.TWEAK]`。数值按 Matter 的
+`SoftwareVersion` 编码（`(major<<24)|(minor<<16)|(patch<<8)|tweak`），Android
+`versionCode`、Windows `FileVersion`、安装包版本、桌面 `packageVersion` 和界面显示的
+版本全部由它推导；不在 tag 上的构建带 `-dev.N+gHASH` 后缀。详见
+[`docs/RELEASING.md`](docs/RELEASING.md)。
+
+```bash
+./gradlew -q printBoxletVersion                                  # 查看当前统一版本号
+git tag -a v1.0.0 -m "Boxlet 1.0.0" && git push origin v1.0.0    # 打 tag 即触发发布流水线
+```
+
+流水线见 [`.github/workflows/release.yml`](.github/workflows/release.yml)：四端并行构建 →
+GitHub Release → Telegram 通知；需要的 Actions 密钥与产物清单同样在
+[`docs/RELEASING.md`](docs/RELEASING.md)。
+
 ## 互通说明
 
 - 新版 Sendee 原生互传支持协商启用的流式 SHA-256：边传边计算，校验通过后保存，省去发送前的完整预读；旧设备自动回退到 LocalSend 预哈希。多文件优先发送小文件，小文件最多四路、大文件最多两路，见 [ADR 0007](docs/adr/0007-streaming-checksum-and-upload-scheduling.md)。

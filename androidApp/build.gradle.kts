@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.compose.compiler)
 }
 
+// 统一版本号：根工程按 git tag 解析（Matter 风格编码），Android 的 versionCode 就是那个 32 位值。
+val boxletVersionName = rootProject.extra["boxletVersionName"] as String
+val boxletVersionCode = rootProject.extra["boxletVersionCode"] as Int
+
 android {
     namespace = "dev.boxlet.android"
     compileSdk = 37
@@ -15,8 +19,8 @@ android {
         // 界面（液态玻璃 / 动态取色）也按 31+ 设计，不再为低版本降级。
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = boxletVersionCode
+        versionName = boxletVersionName
     }
 
     buildFeatures {
@@ -25,18 +29,26 @@ android {
     }
 
     signingConfigs {
-        // 正式签名：在仓库根目录放 keystore.properties（不要提交），四项为
-        // storeFile / storePassword / keyAlias / keyPassword。没有该文件时 release 只产出未签名 APK。
+        // 正式签名：本地读仓库根目录 keystore.properties（不要提交），CI 用环境变量注入
+        // BOXLET_KEYSTORE_PATH / BOXLET_KEYSTORE_PASSWORD / BOXLET_KEY_ALIAS / BOXLET_KEY_PASSWORD。
+        // 两者都没有时 release 只产出未签名 APK。
         val keystoreProperties = rootProject.file("keystore.properties")
-        if (keystoreProperties.exists()) {
-            val properties = Properties().apply {
-                keystoreProperties.inputStream().use { load(it) }
-            }
+        val properties = if (keystoreProperties.exists()) {
+            Properties().apply { keystoreProperties.inputStream().use { load(it) } }
+        } else {
+            null
+        }
+
+        fun credential(property: String, environment: String): String? =
+            properties?.getProperty(property) ?: System.getenv(environment)
+
+        val storePath = credential("storeFile", "BOXLET_KEYSTORE_PATH")
+        if (storePath != null) {
             create("release") {
-                storeFile = rootProject.file(properties.getProperty("storeFile"))
-                storePassword = properties.getProperty("storePassword")
-                keyAlias = properties.getProperty("keyAlias")
-                keyPassword = properties.getProperty("keyPassword")
+                storeFile = rootProject.file(storePath)
+                storePassword = credential("storePassword", "BOXLET_KEYSTORE_PASSWORD")
+                keyAlias = credential("keyAlias", "BOXLET_KEY_ALIAS")
+                keyPassword = credential("keyPassword", "BOXLET_KEY_PASSWORD")
             }
         }
     }

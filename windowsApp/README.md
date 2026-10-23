@@ -73,18 +73,20 @@ Java 优先使用应用目录的 `runtime/bin/java.exe`，开发构建再查找 
 Inno Setup 不自带简体中文词条，`Languages\ChineseSimplified.isl` 存在时安装向导才是中文，否则回落英文。
 
 ```powershell
-# 打包便携 + 安装包（默认版本 1.0.0）
+# 打包便携 + 安装包（版本取 $env:BOXLET_VERSION，默认开发基线 0.1.0）
 .\windowsApp\pack.ps1
 
 # 指定版本与打包用的 OpenJDK
 .\windowsApp\pack.ps1 -Version 1.1.0 -JavaHome C:\path\to\temurin-jdk
 
 # 复用已有的便携目录，只重打安装包（调试 installer.iss 时最快）
-.\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-20261022-024934
+.\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-1.1.0-20261022-024934
 
 # ISCC.exe 不在默认搜索路径时手动指定
 .\windowsApp\pack.ps1 -Iscc "D:\Tools\Inno Setup 6\ISCC.exe"
 ```
+
+版本号统一由 git tag 解析（见 [`docs/RELEASING.md`](../docs/RELEASING.md)），CI 通过 `BOXLET_VERSION` 注入，脚本里不再写死。
 
 脚本与配置：`publish.ps1`（便携）、`installer.iss`（Inno Setup 安装脚本）、`pack.ps1`（便携 + 安装一条龙）。
 

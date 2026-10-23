@@ -1,0 +1,101 @@
+name: CI
+
+# 每次推到 main 和每个 PR 都跑：核心测试、Android Debug、浏览器端、Windows 打包冒烟。
+# 版本号由 git tag 解析（见根 build.gradle.kts），PR 构建自动带 -dev.N+gHASH 后缀。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: 核心测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 打印统一版本号
+        run: ./gradlew -q printBoxletVersion --console=plain
+      - name: :core:jvmTest
+        run: ./gradlew :core:jvmTest --console=plain
+
+  android:
+    name: Android Debug
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-37 build-tools;37.0.0 platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 组装 Debug APK
+        run: ./gradlew :androidApp:assembleDebug --console=plain
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug
+          path: androidApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  web:
+    name: 浏览器端
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 生产打包（Kotlin/Wasm）
+        run: ./gradlew :webApp:wasmJsBrowserProductionWebpack --console=plain
+
+  windows:
+    name: Windows 便携包
+    # Windows 构建最慢，PR 上跳过，只验证 main 与手动触发。
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 构建便携包
+        run: .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
+      - name: 上传便携 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: artifacts/Boxlet-windows-x64-*.zip
+          if-no-files-found: error

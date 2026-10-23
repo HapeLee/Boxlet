@@ -53,3 +53,8 @@ kotlin {
         }
     }
 }
+
+// 统一版本号：根工程按 git tag 生成 dev.boxlet.core.BoxletBuild，各端共用同一份常量。
+kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(
+    rootProject.tasks.named("generateBoxletVersionSource"),
+)

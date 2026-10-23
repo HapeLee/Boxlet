@@ -1,0 +1,284 @@
+name: Release
+
+# 打 tag（v1.2.3 / v1.2.3.4）即触发：四端构建 -> 生成 GitHub Release -> 发 Telegram。
+# 版本号的唯一来源就是这个 tag，所有产物共用同一个版本号（Matter 风格编码，见根 build.gradle.kts）。
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不带 v，例如 1.2.3）'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: 从 tag 或手动输入得到版本号
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\.[0-9]{1,3})?$'; then
+            echo "版本号格式不正确：'$version'（期望 1.2.3 或 1.2.3.4）" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "发布版本：$version"
+
+  android:
+    name: Android
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      BOXLET_VERSION: ${{ needs.prepare.outputs.version }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-37 build-tools;37.0.0 platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 恢复签名密钥
+        if: env.ANDROID_KEYSTORE_BASE64 != ''
+        run: |
+          set -euo pipefail
+          keystore="${RUNNER_TEMP}/boxlet-release.jks"
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "$keystore"
+          {
+            echo "BOXLET_KEYSTORE_PATH=${keystore}"
+            echo "BOXLET_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+            echo "BOXLET_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+            echo "BOXLET_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
+          } >> "$GITHUB_ENV"
+
+      - name: 打包 APK / AAB
+        run: |
+          set -euo pipefail
+          ./gradlew -q printBoxletVersion --console=plain
+          ./gradlew :androidApp:assembleRelease :androidApp:bundleRelease --console=plain
+          mkdir -p dist
+          shopt -s nullglob
+          for apk in androidApp/build/outputs/apk/release/*.apk; do
+            case "$(basename "$apk")" in
+              *unsigned*) out="dist/Boxlet-${BOXLET_VERSION}-android-unsigned.apk" ;;
+              *) out="dist/Boxlet-${BOXLET_VERSION}-android.apk" ;;
+            esac
+            cp "$apk" "$out"
+          done
+          for aab in androidApp/build/outputs/bundle/release/*.aab; do
+            case "$(basename "$aab")" in
+              *unsigned*) out="dist/Boxlet-${BOXLET_VERSION}-android-unsigned.aab" ;;
+              *) out="dist/Boxlet-${BOXLET_VERSION}-android.aab" ;;
+            esac
+            cp "$aab" "$out"
+          done
+          if [ -f androidApp/build/outputs/mapping/release/mapping.txt ]; then
+            cp androidApp/build/outputs/mapping/release/mapping.txt \
+              "dist/Boxlet-${BOXLET_VERSION}-mapping.txt"
+          fi
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      BOXLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 安装 Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: 构建便携包
+        run: .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
+
+      - name: 构建安装包（复用上一步的便携目录）
+        shell: pwsh
+        run: |
+          $source = Get-ChildItem artifacts -Directory -Filter 'Boxlet-windows-x64-*' |
+            Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName
+          Write-Host "复用便携目录: $source"
+          .\windowsApp\pack.ps1 -SkipPublish -Source $source -Iscc (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            artifacts/Boxlet-windows-x64-*.zip
+            artifacts/Boxlet-Setup-*-x64.exe
+          if-no-files-found: error
+
+  web:
+    name: 浏览器端
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      BOXLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 生产打包
+        run: ./gradlew :webApp:wasmJsBrowserProductionWebpack --console=plain
+      - name: 打包静态站点
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd webApp/build/kotlin-webpack/wasmJs/productionExecutable
+          zip -qr "${GITHUB_WORKSPACE}/dist/Boxlet-${BOXLET_VERSION}-web.zip" .
+          ls -lh "${GITHUB_WORKSPACE}/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/*
+          if-no-files-found: error
+
+  engine:
+    name: 无头引擎
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      BOXLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 构建 engine-host
+        run: ./gradlew :engine-host:installDist --console=plain
+      - name: 打包
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd engine-host/build/install/engine-host
+          zip -qr "${GITHUB_WORKSPACE}/dist/Boxlet-${BOXLET_VERSION}-engine.zip" .
+          ls -lh "${GITHUB_WORKSPACE}/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: 创建 Release
+    needs: [prepare, android, windows, web, engine]
+    if: ${{ !cancelled() && needs.android.result == 'success' && needs.windows.result == 'success' && needs.web.result == 'success' && needs.engine.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 发布
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          ls -lh dist
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "Boxlet ${VERSION}" \
+              --generate-notes
+          fi
+
+  notify:
+    name: Telegram 通知
+    needs: [prepare, release]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_RESULT: ${{ needs.release.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.release.result == 'success' }}
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 发送通知
+        run: |
+          set -euo pipefail
+          version="${VERSION:-unknown}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          release_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v${version}"
+          if [ "${RELEASE_RESULT}" = "success" ]; then
+            header="✅ <b>Boxlet ${version}</b> 已发布"
+          else
+            header="❌ <b>Boxlet ${version}</b> 发布失败（${RELEASE_RESULT}）"
+          fi
+          message="$(printf '%s\n%s\n%s\n%s' \
+            "$header" \
+            "仓库：${GITHUB_REPOSITORY}" \
+            "发布页：${release_url}" \
+            "流水线：${run_url}")"
+          shopt -s nullglob
+          files=(dist/*.apk)
+          bash .github/scripts/notify-telegram.sh "$message" "${files[@]}"
