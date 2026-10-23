@@ -44,6 +44,12 @@ class NativeTransferThroughputTest {
     private val senderSecurity = Certificates.generate()
     private val receiverSecurity = Certificates.generate()
 
+    /**
+     * 吞吐下限（MiB/s）。共享 CI runner 的 CPU 与磁盘抖动远大于本机，
+     * 由 BOXLET_TEST_MIN_MIBPS 放宽阈值；不设置时保持本地回归基线。
+     */
+    private val floorMiB = System.getenv("BOXLET_TEST_MIN_MIBPS")?.toIntOrNull() ?: 150
+
     @After
     fun tearDown() {
         scope.cancel()
@@ -96,11 +102,11 @@ class NativeTransferThroughputTest {
 
         // 预热 JIT 与页缓存，避免第一轮数字失真
         transfer(source, total, checksums = false, tag = "warmup", expectMinMiB = 0)
-        transfer(source, total, checksums = true, tag = "legacy-prehash", expectMinMiB = 150, legacy = true)
+        transfer(source, total, checksums = true, tag = "legacy-prehash", expectMinMiB = floorMiB, legacy = true)
         repeat(2) { pass ->
-            transfer(source, total, checksums = true, tag = "checksums#${pass + 1}", expectMinMiB = 150)
+            transfer(source, total, checksums = true, tag = "checksums#${pass + 1}", expectMinMiB = floorMiB)
         }
-        transfer(source, total, checksums = false, tag = "nochecksum", expectMinMiB = 200)
+        transfer(source, total, checksums = false, tag = "nochecksum", expectMinMiB = floorMiB * 4 / 3)
     }
 
     private suspend fun transfer(source: File, total: Long, checksums: Boolean, tag: String, expectMinMiB: Int, legacy: Boolean = false) {

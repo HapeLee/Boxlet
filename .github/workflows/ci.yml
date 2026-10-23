@@ -20,6 +20,9 @@ jobs:
   core:
     name: 核心测试
     runs-on: ubuntu-latest
+    env:
+      # 共享 runner 的吞吐远低于开发机，放宽吞吐回归阈值（本地默认 150 MiB/s）
+      BOXLET_TEST_MIN_MIBPS: '20'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,8 +49,12 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-37 build-tools;37.0.0 platform-tools'
+      - name: 安装 Android SDK 平台
+        # API 37 的平台包名带小版本号（platforms;android-37.0），与 compileSdk = 37 对应
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
       - name: 组装 Debug APK
         run: ./gradlew :androidApp:assembleDebug --console=plain
