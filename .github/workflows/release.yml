@@ -64,12 +64,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
       - name: 安装 Android SDK 平台
+        # 用 runner 预装的 SDK，避免 android-actions/setup-android 在 cmdline-tools 16 上的 `tools` 包问题
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$(ls -d "$sdk_root"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)"
+          echo "使用 $sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
 
       - name: 恢复签名密钥

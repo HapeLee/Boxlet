@@ -48,13 +48,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
       - name: 安装 Android SDK 平台
-        # API 37 的平台包名带小版本号（platforms;android-37.0），与 compileSdk = 37 对应
+        # 直接用 runner 预装的 SDK：android-actions/setup-android 在 cmdline-tools 16 上
+        # 会去装已下线的 `tools` 包而失败。API 37 的平台包名带小版本号，与 compileSdk = 37 对应。
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$(ls -d "$sdk_root"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)"
+          echo "使用 $sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
       - name: 组装 Debug APK
         run: ./gradlew :androidApp:assembleDebug --console=plain
