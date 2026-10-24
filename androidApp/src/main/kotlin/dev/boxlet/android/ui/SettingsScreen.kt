@@ -13,6 +13,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,6 +34,9 @@ import dev.boxlet.core.protocol.Protocol
 import dev.boxlet.shared.BoxletApp
 import dev.boxlet.shared.ThemeMode
 import dev.boxlet.shared.UiState
+import dev.boxlet.shared.bp2PairingError
+import dev.boxlet.shared.bp2Status
+import dev.boxlet.shared.parseBp2Endpoint
 
 @Composable
 fun SettingsScreen(
@@ -41,6 +48,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val settings = state.settings
+    var connectionError by remember { mutableStateOf<String?>(null) }
 
     val directoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -70,9 +78,11 @@ fun SettingsScreen(
                     onCommit = { value -> app.updateSettings { it.copy(alias = value.trim()) } },
                 )
                 EditableSettingItem(
-                    title = "端口",
+                    title = "LocalSend 端口",
                     value = settings.port.toString(),
-                    supportingText = "可用范围：1024–65535。",
+                    supportingText = if (settings.bp2Enabled && settings.port == Protocol.DEFAULT_PORT)
+                        "启用 BP/2 时，旧默认值 53318 会自动使用 53317，避免与 BP/2 冲突。"
+                        else "可用范围：1024–65535。",
                     keyboardType = KeyboardType.Number,
                     validate = { value ->
                         if (value.trim().toIntOrNull() in 1024..65535) null else "请输入 1024–65535 之间的端口"
@@ -91,6 +101,54 @@ fun SettingsScreen(
         }
 
         item {
+            SettingGroup(title = "Boxlet Protocol 2") {
+                SwitchSettingItem(
+                    title = "优先使用 BP/2",
+                    checked = settings.bp2Enabled,
+                    description = "已配对 Boxlet 使用 BP/2；其他设备自动使用 LocalSend",
+                    onCheckedChange = { value -> app.updateSettings { it.copy(bp2Enabled = value) } },
+                )
+                SettingItem(title = "状态", description = state.bp2Status)
+                connectionError?.let { SettingItem(title = "连接失败", description = it) }
+                EditableSettingItem(
+                    title = "BP/2 端口", value = settings.bp2Port.toString(),
+                    keyboardType = KeyboardType.Number,
+                    validate = { if (it.trim().toIntOrNull() in 1024..65535) null else "请输入 1024–65535 之间的端口" },
+                    onCommit = { value -> app.updateSettings { it.copy(bp2Port = value.trim().toInt()) } },
+                )
+                SettingItem(
+                    title = "本机指纹（点击复制）", description = state.fingerprint,
+                    onClick = {
+                        context.getSystemService(android.content.ClipboardManager::class.java)
+                            ?.setPrimaryClip(android.content.ClipData.newPlainText("Boxlet 指纹", state.fingerprint))
+                    },
+                )
+                EditableSettingItem(
+                    title = "添加已核对的对端指纹", value = "",
+                    valueSummary = "双方核对完整指纹，并分别添加对方。修改配对会重启接收服务。",
+                    validate = { bp2PairingError(it, state.fingerprint) },
+                    onCommit = { app.trustBp2Peer(it, true) },
+                )
+                settings.bp2TrustedPeers.sorted().forEach { fingerprint ->
+                    SettingItem(title = "已配对设备", description = fingerprint,
+                        dropdownMenu = { dismiss ->
+                            DropdownMenuItem(text = { Text("撤销配对") }, onClick = {
+                                app.trustBp2Peer(fingerprint, false); dismiss()
+                            })
+                        })
+                    if (settings.bp2Enabled) EditableSettingItem(
+                        title = "直接连接此设备", value = "",
+                        valueSummary = "自动发现不可用时填写 IP 或 主机:端口，默认 53318",
+                        validate = { runCatching { parseBp2Endpoint(it) }.exceptionOrNull()?.message },
+                        onCommit = { address ->
+                            connectionError = runCatching { app.connectBp2(address, fingerprint) }.exceptionOrNull()?.message
+                        },
+                    )
+                }
+            }
+        }
+
+        item {
             SettingGroup(title = "传输") {
                 SwitchSettingItem(
                     title = "快速保存",
@@ -105,15 +163,15 @@ fun SettingsScreen(
                     onCheckedChange = { value -> app.updateSettings { it.copy(quickSaveFromFavorites = value) } },
                 )
                 SwitchSettingItem(
-                    title = "发送时计算 SHA-256",
-                    checked = settings.createChecksums,
-                    description = "新版 Sendee 边传边校验；兼容设备会在发送前计算校验值",
-                    onCheckedChange = { value -> app.updateSettings { it.copy(createChecksums = value) } },
+                    title = "LocalSend 快速发送（跳过预哈希）",
+                    checked = !settings.createChecksums,
+                    description = "接收同意后直接上传，不提供整文件 SHA-256 比对；关闭则启用发送校验。BP/2 照常校验。",
+                    onCheckedChange = { value -> app.updateSettings { it.copy(createChecksums = !value) } },
                 )
                 SwitchSettingItem(
-                    title = "接收时校验 SHA-256",
+                    title = "LocalSend 接收校验",
                     checked = settings.verifyChecksums,
-                    description = "校验失败会自动重传（最多 3 次）",
+                    description = "校验兼容传输的 SHA-256；BP/2 完整性校验始终启用",
                     onCheckedChange = { value -> app.updateSettings { it.copy(verifyChecksums = value) } },
                 )
                 SwitchSettingItem(
@@ -123,10 +181,10 @@ fun SettingsScreen(
                     onCheckedChange = { value -> app.updateSettings { it.copy(saveToHistory = value) } },
                 )
                 EditableSettingItem(
-                    title = "接收 PIN",
+                    title = "LocalSend 接收 PIN",
                     value = settings.receivePin.orEmpty(),
                     valueSummary = if (settings.receivePin.isNullOrBlank()) "未启用" else "已启用",
-                    supportingText = "设置 4–8 位数字；留空关闭。发送方需要输入相同 PIN 才能发送文件。",
+                    supportingText = "用于 LocalSend 兼容传输；设置 4–8 位数字，留空关闭。BP/2 使用双方指纹配对授权。",
                     keyboardType = KeyboardType.NumberPassword,
                     sensitive = true,
                     validate = { value ->
@@ -158,9 +216,9 @@ fun SettingsScreen(
         item {
             SettingGroup(title = "网络") {
                 SwitchSettingItem(
-                    title = "HTTPS 加密",
+                    title = "LocalSend HTTPS 加密",
                     checked = settings.https,
-                    description = "使用自签名证书 + 指纹固定；关闭后仅建议在可信网络使用",
+                    description = "控制兼容传输；BP/2 始终使用 TLS 加密",
                     onCheckedChange = { value -> app.updateSettings { it.copy(https = value) } },
                 )
                 EditableSettingItem(
@@ -242,7 +300,7 @@ fun SettingsScreen(
                 SettingCard {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         InfoRow("版本", BuildConfig.VERSION_NAME)
-                        InfoRow("协议", "LocalSend v${Protocol.VERSION}")
+                        InfoRow("协议", "Boxlet Protocol 2 · 兼容 LocalSend v${Protocol.VERSION}")
                         Text("设备指纹", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             state.fingerprint,

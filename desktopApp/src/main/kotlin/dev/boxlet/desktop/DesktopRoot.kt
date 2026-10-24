@@ -41,6 +41,8 @@ import dev.boxlet.core.protocol.Protocol
 import dev.boxlet.shared.BoxletApp
 import dev.boxlet.shared.ThemeMode
 import dev.boxlet.shared.UiState
+import dev.boxlet.shared.bp2PairingError
+import dev.boxlet.shared.bp2Status
 import kotlinx.coroutines.delay
 import io.github.composefluent.ExperimentalFluentApi
 import io.github.composefluent.FluentTheme
@@ -183,7 +185,7 @@ private fun SendPage(
     val selection by app.sendSelection.collectAsState()
     val sending = state.outgoing?.status in setOf(
         TransferStatus.PREPARING, TransferStatus.WAITING_FOR_ACCEPT,
-        TransferStatus.PIN_REQUIRED, TransferStatus.TRANSFERRING,
+        TransferStatus.PIN_REQUIRED, TransferStatus.TRANSFERRING, TransferStatus.PAUSED,
     )
     var importError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(droppedFiles) {
@@ -270,7 +272,11 @@ private fun SendPage(
                     transferredBytes = outgoing.files.sumOf { it.bytesTransferred },
                     totalBytes = outgoing.files.sumOf { it.size },
                     files = outgoing.files.map { it.fileName to it.status },
-                    onCancel = if (outgoing.status == TransferStatus.TRANSFERRING ||
+                    restartFiles = outgoing.files.filter { it.restartRequired }.map { it.id to it.fileName },
+                    onResetFile = { app.engine.resetOutgoingFile(it) },
+                    onTogglePause = if (outgoing.adapterId == "boxlet-bp2" && outgoing.status in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
+                        ({ app.engine.setTransferPaused(true, outgoing.status != TransferStatus.PAUSED) }) else null,
+                    onCancel = if (outgoing.status == TransferStatus.TRANSFERRING || outgoing.status == TransferStatus.PAUSED ||
                         outgoing.status == TransferStatus.PREPARING
                     ) {
                         { app.cancelSend() }
@@ -423,8 +429,10 @@ private fun ReceivePage(app: BoxletApp, state: UiState) {
                     transferredBytes = incoming.files.sumOf { it.bytesTransferred },
                     totalBytes = incoming.files.sumOf { it.size },
                     files = incoming.files.map { it.fileName to it.status },
+                    onTogglePause = if (incoming.adapterId == "boxlet-bp2" && incoming.status in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
+                        ({ app.engine.setTransferPaused(false, incoming.status != TransferStatus.PAUSED) }) else null,
                     onCancel = when (incoming.status) {
-                        TransferStatus.TRANSFERRING -> ({ app.cancelReceive() })
+                        TransferStatus.TRANSFERRING, TransferStatus.PAUSED -> ({ app.cancelReceive() })
                         TransferStatus.COMPLETED, TransferStatus.FAILED, TransferStatus.CANCELLED -> ({ app.clearIncoming() })
                         else -> null
                     },
@@ -514,19 +522,52 @@ private fun HistoryPage(app: BoxletApp, state: UiState) {
 @Composable
 private fun SettingsPage(app: BoxletApp, state: UiState) {
     val settings = state.settings
+    var pairingError by remember { mutableStateOf<String?>(null) }
     PageLayout(title = "设置", subtitle = "修改会立即生效并写入本地配置") {
         item {
             SectionCard("设备") {
                 CommitRow("设备名称", settings.alias) { value ->
                     if (value.isNotBlank()) app.updateSettings { it.copy(alias = value.trim()) }
                 }
-                CommitRow("端口", settings.port.toString()) { value ->
+                CommitRow("LocalSend 端口", settings.port.toString()) { value ->
                     value.toIntOrNull()?.takeIf { it in 1024..65535 }?.let { port ->
                         app.updateSettings { it.copy(port = port) }
                     }
                 }
+                if (settings.bp2Enabled && settings.port == Protocol.DEFAULT_PORT) {
+                    Text("启用 BP/2 时，旧默认值 53318 自动使用 53317，避免端口冲突。")
+                }
                 CommitRow("设备型号", settings.deviceModel.orEmpty()) { value ->
                     app.updateSettings { it.copy(deviceModel = value.trim().ifBlank { null }) }
+                }
+            }
+        }
+
+        item {
+            SectionCard("Boxlet Protocol 2") {
+                SwitchRow("优先使用 BP/2", "已配对 Boxlet 使用 BP/2；其他设备自动使用 LocalSend", settings.bp2Enabled) { value ->
+                    app.updateSettings { it.copy(bp2Enabled = value) }
+                }
+                InfoLine("状态", state.bp2Status)
+                CommitRow("BP/2 端口", settings.bp2Port.toString()) { value ->
+                    value.trim().toIntOrNull()?.takeIf { it in 1024..65535 }?.let { port ->
+                        app.updateSettings { it.copy(bp2Port = port) }
+                    }
+                }
+                Text("双方先核对完整指纹，再分别添加对方。修改配对或协议设置会重启接收服务。")
+                InfoLine("本机指纹", state.fingerprint)
+                Button(onClick = { copyToClipboard(state.fingerprint) }) { Text("复制本机指纹") }
+                CommitRow("已核对的对端指纹", "") { value ->
+                    pairingError = bp2PairingError(value, state.fingerprint)
+                    if (pairingError == null) app.trustBp2Peer(value, true)
+                }
+                pairingError?.let { Text(it) }
+                settings.bp2TrustedPeers.sorted().forEach { fingerprint ->
+                    InfoLine("已配对设备", fingerprint)
+                    Button(onClick = { app.trustBp2Peer(fingerprint, false) }) { Text("撤销配对") }
+                    CommitRow("直接连接的 IP 或 主机:端口（默认 53318）", "") { host ->
+                        pairingError = runCatching { app.connectBp2(host, fingerprint) }.exceptionOrNull()?.message
+                    }
                 }
             }
         }
@@ -539,16 +580,16 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
                 SwitchRow("仅收藏设备自动接收", "只对已收藏设备启用快速保存", settings.quickSaveFromFavorites) { value ->
                     app.updateSettings { it.copy(quickSaveFromFavorites = value) }
                 }
-                SwitchRow("发送时计算 SHA-256", "新版 Sendee 边传边校验；兼容设备会在发送前计算校验值", settings.createChecksums) { value ->
-                    app.updateSettings { it.copy(createChecksums = value) }
+                SwitchRow("LocalSend 快速发送（跳过预哈希）", "接收同意后直接上传，不提供整文件 SHA-256 比对；关闭则启用发送校验。BP/2 照常校验。", !settings.createChecksums) { value ->
+                    app.updateSettings { it.copy(createChecksums = !value) }
                 }
-                SwitchRow("接收时校验 SHA-256", "失败自动重传，最多 3 次", settings.verifyChecksums) { value ->
+                SwitchRow("LocalSend 接收校验", "校验兼容传输的 SHA-256；BP/2 完整性校验始终启用", settings.verifyChecksums) { value ->
                     app.updateSettings { it.copy(verifyChecksums = value) }
                 }
                 SwitchRow("记录接收历史", "保存文件与消息记录", settings.saveToHistory) { value ->
                     app.updateSettings { it.copy(saveToHistory = value) }
                 }
-                CommitRow("接收 PIN（留空关闭）", settings.receivePin.orEmpty()) { value ->
+                CommitRow("LocalSend 接收 PIN（留空关闭）", settings.receivePin.orEmpty()) { value ->
                     app.updateSettings { it.copy(receivePin = value.trim().ifBlank { null }) }
                 }
             }
@@ -575,7 +616,7 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
 
         item {
             SectionCard("网络") {
-                SwitchRow("HTTPS 加密", "自签名证书 + 指纹固定；关闭后仅限可信网络", settings.https) { value ->
+                SwitchRow("LocalSend HTTPS 加密", "控制兼容传输；BP/2 始终使用 TLS 加密", settings.https) { value ->
                     app.updateSettings { it.copy(https = value) }
                 }
                 CommitRow("多播组", settings.multicastGroup) { value ->
@@ -636,7 +677,7 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
         item {
             SectionCard("关于") {
                 InfoLine("版本", BoxletBuild.VERSION)
-                InfoLine("协议", "LocalSend v${Protocol.VERSION}")
+                InfoLine("协议", "Boxlet Protocol 2 · 兼容 LocalSend v${Protocol.VERSION}")
                 InfoLine("设备指纹", "")
                 Text(
                     state.fingerprint,
@@ -738,9 +779,12 @@ private fun TransferCard(
     error: String? = null,
     transferredBytes: Long = 0L,
     totalBytes: Long = 0L,
+    onTogglePause: (() -> Unit)? = null,
+    restartFiles: List<Pair<String, String>> = emptyList(),
+    onResetFile: ((String) -> Unit)? = null,
 ) {
     val transferring = status == TransferStatus.TRANSFERRING
-    val busy = transferring ||
+    val busy = transferring || status == TransferStatus.PAUSED ||
         status == TransferStatus.PREPARING ||
         status == TransferStatus.WAITING_FOR_ACCEPT
 
@@ -789,11 +833,15 @@ private fun TransferCard(
                         )
                     }
                 }
+                if (onTogglePause != null) {
+                    Button(onClick = onTogglePause) { Text(if (status == TransferStatus.PAUSED) "继续传输" else "暂停传输") }
+                    Spacer(Modifier.width(8.dp))
+                }
                 if (onCancel != null) {
                     Button(onClick = onCancel) { Text(if (busy) "取消传输" else "关闭") }
                 }
             }
-            if (transferring || status == TransferStatus.COMPLETED) {
+            if (transferring || status == TransferStatus.PAUSED || status == TransferStatus.COMPLETED) {
                 Spacer(Modifier.height(12.dp))
                 ProgressBar(progress = progress.coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(6.dp))
@@ -811,6 +859,13 @@ private fun TransferCard(
                 }
             }
             Spacer(Modifier.height(8.dp))
+            if (status == TransferStatus.PAUSED && onResetFile != null) {
+                restartFiles.forEach { (id, name) ->
+                    Button(onClick = { onResetFile(id) }) {
+                        Text("使用当前内容从头重传：${name.substringAfterLast('/')}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
             files.take(8).forEach { (name, fileStatus) ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                     Text(
@@ -904,6 +959,7 @@ private fun statusText(status: TransferStatus): String = when (status) {
     TransferStatus.WAITING_FOR_ACCEPT -> "等待对方接收…"
     TransferStatus.PIN_REQUIRED -> "需要 PIN"
     TransferStatus.TRANSFERRING -> "正在传输"
+    TransferStatus.PAUSED -> "已暂停"
     TransferStatus.COMPLETED -> "已完成"
     TransferStatus.FAILED -> "失败"
     TransferStatus.DECLINED -> "对方拒绝"

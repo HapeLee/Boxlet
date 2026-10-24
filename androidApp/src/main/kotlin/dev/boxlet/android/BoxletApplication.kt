@@ -52,6 +52,7 @@ class BoxletApplication : Application() {
             dataDir = File(filesDir, "boxlet"),
             storage = storage,
             defaults = defaults,
+            sourceResolver = dev.boxlet.android.storage.AndroidSourceResolver(this),
         )
 
         runCatching {

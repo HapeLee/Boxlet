@@ -61,6 +61,7 @@ data class HistoryEntry(
     val fileSize: Long = 0,
     val senderAlias: String = "",
     val timestamp: Long = System.currentTimeMillis(),
+    val adapterId: String = "localsend-v2",
 )
 
 class HistoryRepository(
@@ -72,7 +73,7 @@ class HistoryRepository(
 
     fun add(entry: HistoryEntry) {
         store.update { current ->
-            (listOf(entry) + current).take(500)
+            (listOf(entry) + current.filterNot { it.id == entry.id }).take(500)
         }
     }
 
@@ -92,8 +93,10 @@ class HistoryRepository(
         fileSize: Long,
         senderAlias: String,
         timestamp: Long,
+        adapterId: String = "localsend-v2",
+        completionId: String? = null,
     ): HistoryEntry = HistoryEntry(
-        id = UUID.randomUUID().toString(),
+        id = completionId ?: UUID.randomUUID().toString(),
         fileName = message ?: fileName,
         fileType = fileType,
         path = path,
@@ -101,6 +104,7 @@ class HistoryRepository(
         fileSize = fileSize,
         senderAlias = senderAlias,
         timestamp = timestamp,
+        adapterId = adapterId,
     )
 }
 

@@ -52,8 +52,13 @@ fun main(args: Array<String>) {
     val running = AtomicBoolean(true)
 
     lateinit var app: BoxletApp
-    val storage = FileSystemReceiveStorage {
-        val configured = app.currentSettings.destination
+    var runningApp: BoxletApp? = null
+    val startupDestination = runCatching {
+        BoxletJson.decodeFromString(Settings.serializer(), File(dataDir, "settings.json").readText(Charsets.UTF_8)).destination
+    }.getOrNull()
+    val storage = FileSystemReceiveStorage(File(dataDir, "bp2-receive")) {
+        val current = runningApp
+        val configured = if (current == null) startupDestination else current.currentSettings.destination
         if (configured != null) File(configured)
         else if (desktop) DefaultDownloadDir.resolve()
         else File(dataDir, "received")
@@ -67,6 +72,7 @@ fun main(args: Array<String>) {
             deviceModel = "${System.getProperty("os.name")} ${System.getProperty("os.version")}".trim(),
         ),
     )
+    runningApp = app
 
     // 管道协议固定 UTF-8；Windows System.out 的本机代码页可能不同于 file.encoding。
     val writer = PrintWriter(OutputStreamWriter(System.out, Charsets.UTF_8), true)
@@ -118,10 +124,29 @@ fun main(args: Array<String>) {
                     put("fingerprint", app.state.value.fingerprint)
                     put("protocol", Protocol.VERSION)
                     put("deviceCount", app.state.value.devices.size)
+                    put("bp2Enabled", app.currentSettings.bp2Enabled)
+                    put("bp2Port", app.engine.bp2Port)
                 }))
 
                 "devices.scan" -> {
                     app.scan()
+                    emit(okResponse(id, buildJsonObject { put("started", true) }))
+                }
+
+                "bp2.trust-peer", "bp2.untrust-peer" -> {
+                    val fingerprint = params["fingerprint"]?.jsonPrimitive?.contentOrNull ?: error("fingerprint is required")
+                    app.trustBp2Peer(fingerprint, command == "bp2.trust-peer")
+                    emit(okResponse(id, buildJsonObject { put("updated", true) }))
+                }
+
+                "bp2.connect" -> {
+                    require(params.keys.all { it in setOf("host", "port", "fingerprint") }) {
+                        "bp2.connect only accepts host, port and fingerprint (TCP/TLS)"
+                    }
+                    val host = params["host"]?.jsonPrimitive?.contentOrNull ?: error("host is required")
+                    val port = params["port"]?.jsonPrimitive?.intOrNull ?: dev.boxlet.core.protocol.bp2.Bp2.PORT
+                    val fingerprint = params["fingerprint"]?.jsonPrimitive?.contentOrNull ?: error("fingerprint is required")
+                    app.engine.connectBp2(host, port, fingerprint)
                     emit(okResponse(id, buildJsonObject { put("started", true) }))
                 }
 
@@ -208,10 +233,27 @@ fun main(args: Array<String>) {
                     emit(okResponse(id, buildJsonObject { put("cancelled", true) }))
                 }
 
+                "transfer.pause", "transfer.continue" -> {
+                    val outgoing = when (params["direction"]?.jsonPrimitive?.contentOrNull) {
+                        "send" -> true
+                        "receive" -> false
+                        else -> error("direction must be send or receive")
+                    }
+                    require(app.engine.setTransferPaused(outgoing, command == "transfer.pause")) { "No active BP/2 transfer" }
+                    emit(okResponse(id, buildJsonObject { put("started", true) }))
+                }
+
                 "transfer.pin" -> {
                     val pin = params["pin"]?.jsonPrimitive?.contentOrNull ?: error("pin is required")
                     app.submitPin(pin)
                     emit(okResponse(id, buildJsonObject { put("submitted", true) }))
+                }
+
+                "transfer.reset-file" -> {
+                    require(params["direction"]?.jsonPrimitive?.contentOrNull == "send") { "direction must be send" }
+                    val fileId = params["fileId"]?.jsonPrimitive?.contentOrNull ?: error("fileId is required")
+                    require(app.engine.resetOutgoingFile(fileId)) { "No paused BP/2 file requiring reset" }
+                    emit(okResponse(id, buildJsonObject { put("started", true) }))
                 }
 
                 "settings.get" -> emit(okResponse(id, BoxletJson.encodeToJsonElement(Settings.serializer(), app.currentSettings)))
@@ -270,6 +312,7 @@ fun main(args: Array<String>) {
                             put("fileSize", entry.fileSize)
                             put("senderAlias", entry.senderAlias)
                             put("timestamp", entry.timestamp)
+                            put("adapterId", entry.adapterId)
                         })
                     }
                 }))
@@ -307,6 +350,7 @@ private fun File.toOutgoingFile(nameOverride: String?): dev.boxlet.core.engine.O
         size = length(),
         mimeType = mime,
         modified = Instant.fromEpochMilliseconds(lastModified()),
+        recoverySource = dev.boxlet.core.protocol.bp2.Bp2SourceRef("file", canonicalPath),
         openSource = { source() },
     )
 }
@@ -355,6 +399,18 @@ private fun stateToJson(state: UiState): JsonObject = buildJsonObject {
             put("pinRequired", share.pinRequired)
         }
     }
+    putJsonArray("protocols") {
+        state.protocols.forEach { protocol ->
+            add(buildJsonObject {
+                put("adapterId", protocol.adapterId)
+                put("enabled", protocol.enabled)
+                put("discoveryReady", protocol.discoveryReady)
+                put("sendReady", protocol.sendReady)
+                put("receiveReady", protocol.receiveReady)
+                put("reason", protocol.reason)
+            })
+        }
+    }
     putJsonArray("devices") {
         state.devices.forEach { device ->
             add(buildJsonObject {
@@ -369,6 +425,8 @@ private fun stateToJson(state: UiState): JsonObject = buildJsonObject {
                             put("host", channel.host)
                             put("port", channel.port)
                             put("https", channel.https)
+                            put("adapterId", channel.adapterId)
+                            put("identityVerified", channel.identityVerified)
                         })
                     }
                 }
@@ -398,10 +456,16 @@ private fun stateToJson(state: UiState): JsonObject = buildJsonObject {
             put("sessionId", outgoing.sessionId)
             put("peer", outgoing.peer.alias)
             put("status", outgoing.status.name.lowercase())
+            put("adapterId", outgoing.adapterId)
             put("progress", outgoing.progress)
             put("transferredBytes", outgoing.transferredBytes)
             put("totalBytes", outgoing.totalBytes)
             put("error", outgoing.error)
+            putJsonArray("files") { outgoing.files.forEach { file -> add(buildJsonObject {
+                put("id", file.id); put("fileName", file.fileName); put("size", file.size); put("fileType", file.mimeType)
+                put("status", file.status.name.lowercase()); put("bytesTransferred", file.bytesTransferred); put("savedPath", file.savedPath); put("error", file.error)
+                put("restartRequired", file.restartRequired)
+            }) } }
         }
     }
     state.incoming?.let { incoming ->
@@ -409,10 +473,15 @@ private fun stateToJson(state: UiState): JsonObject = buildJsonObject {
             put("sessionId", incoming.sessionId)
             put("peer", incoming.peer.alias)
             put("status", incoming.status.name.lowercase())
+            put("adapterId", incoming.adapterId)
             put("progress", incoming.progress)
             put("transferredBytes", incoming.transferredBytes)
             put("totalBytes", incoming.totalBytes)
             put("error", incoming.error)
+            putJsonArray("files") { incoming.files.forEach { file -> add(buildJsonObject {
+                put("id", file.id); put("fileName", file.fileName); put("size", file.size); put("fileType", file.mimeType)
+                put("status", file.status.name.lowercase()); put("bytesTransferred", file.bytesTransferred); put("savedPath", file.savedPath); put("error", file.error)
+            }) } }
         }
     }
 }

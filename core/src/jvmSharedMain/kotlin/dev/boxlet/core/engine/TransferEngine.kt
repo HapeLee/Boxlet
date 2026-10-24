@@ -29,6 +29,7 @@ import dev.boxlet.core.protocol.ProtocolType
 import dev.boxlet.core.protocol.RegisterRequest
 import dev.boxlet.core.protocol.BoxletJson
 import dev.boxlet.core.protocol.toDevice
+import dev.boxlet.core.routing.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -45,7 +46,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -73,6 +73,7 @@ class TransferEngine(
     private val scope: CoroutineScope,
     private val security: SecurityContext,
     private val storage: ReceiveStorage,
+    private val sendJournal: dev.boxlet.core.session.bp2.Bp2SendJournal? = null,
 ) : LocalSendHandler {
 
     private val api = ApiClient(security)
@@ -90,12 +91,17 @@ class TransferEngine(
 
     private var httpServer: LocalSendHttpServer? = null
     private var discovery: DiscoveryService? = null
+    private var officialLocalSendDiscovery: DiscoveryService? = null
+    private var bp2Adapter: Bp2EngineAdapter? = null
+    private var routedChannel: DeviceChannel? = null
+    val bp2Port: Int get() = bp2Adapter?.port ?: 0
     private var sweepJob: Job? = null
     @Volatile
     private var shareServer: ShareServer? = null
     private var bridgeServer: BridgeServer? = null
     private var actualPort: Int = Protocol.DEFAULT_PORT
     private var sendJob: Job? = null
+    private var cancelNotification: Job? = null
 
     @Volatile
     private var receiveSession: ReceiveSession? = null
@@ -114,17 +120,18 @@ class TransferEngine(
     // ---------------------------------------------------------------------
 
     fun start() {
-        if (httpServer != null) return
+        if (httpServer != null || bp2Adapter != null) return
         val config = configProvider()
         val apiServer = LocalSendApiServer(this)
         val server = apiServer.newServer(
             security = security,
-            port = config.port,
+            port = if (config.bp2Enabled && config.port == Protocol.DEFAULT_PORT) Protocol.LOCALSEND_PORT else config.port,
             scope = scope,
             https = config.protocolType == ProtocolType.HTTPS,
         )
         val boundPort = runCatching { server.start() }.getOrElse { error ->
             _state.update { it.copy(error = bindFailureMessage(config.port, error)) }
+            if (config.bp2Enabled) startBp2()
             return
         }
         actualPort = boundPort
@@ -132,6 +139,7 @@ class TransferEngine(
         sendCancelled.set(false)
         _state.update { it.copy(serverRunning = true, error = null) }
 
+        var primaryDiscoveryReady = false
         discovery = DiscoveryService(
             scope = scope,
             configProvider = ::discoveryConfig,
@@ -140,10 +148,42 @@ class TransferEngine(
                 _state.update { it.copy(error = "设备发现已停止：${error.message}") }
             },
         ).also { service ->
-            runCatching { service.start() }.onFailure { error ->
+            runCatching { service.start() }.onSuccess { primaryDiscoveryReady = true }.onFailure { error ->
+                service.stop()
                 _state.update { it.copy(error = "UDP 发现启动失败：${error.message}") }
             }
         }
+
+        // Transitional LocalSend server can keep its current HTTP port. Official clients listen
+        // on UDP 53317 and connect to the HTTP port advertised in the standard announcement.
+        // A custom discovery group still needs the official group for LocalSend compatibility.
+        val officialPrimary = actualPort == Protocol.LOCALSEND_PORT && config.multicastGroup == Protocol.DEFAULT_MULTICAST_GROUP
+        val needsOfficialDiscovery = config.port != 0 && !officialPrimary
+        var officialReady = officialPrimary && primaryDiscoveryReady
+        var compatibilityFailure: String? = null
+        if (needsOfficialDiscovery) {
+            val service = DiscoveryService(
+                scope, { discoveryConfig().copy(multicastGroup = Protocol.DEFAULT_MULTICAST_GROUP,
+                    discoveryPort = Protocol.LOCALSEND_PORT) }, ::handleAnnounce,
+                onFailure = { error ->
+                    _state.update { state -> state.copy(protocols = state.protocols.map {
+                        if (it.adapterId == "localsend-v2") it.copy(reason = "LocalSend 官方发现已停止：${error.message}") else it
+                    }) }
+                },
+            )
+            runCatching { service.start() }.onSuccess {
+                officialLocalSendDiscovery = service
+                officialReady = true
+            }.onFailure {
+                service.stop()
+                compatibilityFailure = "LocalSend 官方发现不可用：${it.message}"
+            }
+        }
+        _state.update { it.copy(protocols = listOf(dev.boxlet.core.routing.AdapterState(
+            "localsend-v2", discoveryReady = officialReady || primaryDiscoveryReady,
+            sendReady = true, receiveReady = true, reason = compatibilityFailure,
+        ))) }
+        if (config.bp2Enabled) startBp2()
 
         sweepJob = scope.launch {
             while (isActive) {
@@ -154,6 +194,10 @@ class TransferEngine(
     }
 
     fun stop() {
+        bp2Adapter?.close()
+        bp2Adapter = null
+        officialLocalSendDiscovery?.stop()
+        officialLocalSendDiscovery = null
         discovery?.stop()
         discovery = null
         sweepJob?.cancel()
@@ -166,9 +210,12 @@ class TransferEngine(
         httpServer = null
         sendJob?.cancel()
         sendJob = null
+        cancelNotification?.cancel()
+        cancelNotification = null
+        api.cancelAll()
         receiveSession?.decision?.complete(null)
         receiveSession = null
-        _state.update { it.copy(serverRunning = false, pendingReceive = null) }
+        _state.update { it.copy(serverRunning = false, pendingReceive = null, protocols = emptyList()) }
     }
 
     fun restart() {
@@ -302,7 +349,7 @@ class TransferEngine(
                     PeerDevice(
                         id = device.fingerprint,
                         alias = device.alias,
-                        deviceType = device.deviceType?.name?.lowercase() ?: "desktop",
+                        deviceType = device.deviceType.name.lowercase(),
                         host = channel.host,
                         port = channel.port,
                         online = System.currentTimeMillis() - device.lastSeen < Protocol.DEVICE_ONLINE_WINDOW_MS,
@@ -344,6 +391,8 @@ class TransferEngine(
 
     fun announceNow() {
         discovery?.announceNow()
+        officialLocalSendDiscovery?.announceNow()
+        bp2Adapter?.announceNow()
     }
 
     /** Registers a peer discovered out of band (known host / tests). */
@@ -351,9 +400,40 @@ class TransferEngine(
         upsert(device)
     }
 
+    fun connectBp2(host: String, port: Int, fingerprint: String) {
+        (bp2Adapter ?: error("BP/2 is not enabled")).connectPeer(host, port, fingerprint)
+    }
+
     // ---------------------------------------------------------------------
     // Discovery
     // ---------------------------------------------------------------------
+
+    private fun startBp2() {
+        val adapter = Bp2EngineAdapter(scope, security, storage, { configProvider() }, receiveMutex,
+            { receiveSession != null }, { change -> _state.update(change) }, ::upsert,
+            { completion -> _completions.emit(completion) }, sendJournal)
+        try {
+            val status = adapter.start()
+            bp2Adapter = adapter
+            _state.update { it.copy(serverRunning = true, protocols = it.protocols.filterNot { s -> s.adapterId == status.adapterId } + status) }
+        } catch (error: Throwable) {
+            adapter.close()
+            _state.update { it.copy(protocols = it.protocols + AdapterState(TransferRouter.BOXLET, reason = error.message)) }
+        }
+    }
+
+    private fun route(device: Device): DeviceChannel {
+        val router = TransferRouter().apply { _state.value.protocols.forEach(::update) }
+        val channels = device.channels
+        val endpoints = channels.mapIndexed { index, channel ->
+            DiscoveredEndpoint("${channel.adapterId}:$index", channel.adapterId, device.fingerprint,
+                "${channel.host}:${channel.port}", device.alias, device.lastSeen,
+                setOf(TransferCapability.FILES, TransferCapability.TEXT, TransferCapability.FOLDERS),
+                verifiedCertificate = device.fingerprint.lowercase().takeIf { channel.identityVerified && it.length == 64 })
+        }
+        val selected = router.select(PeerRecord(device.fingerprint, endpoints))
+        return channels[endpoints.indexOf(selected.endpoint)]
+    }
 
     private fun discoveryConfig(): DiscoveryConfig {
         val config = configProvider()
@@ -394,6 +474,7 @@ class TransferEngine(
             if (!result.isSuccessful) {
                 // 对方的 HTTP 打不通（防火墙/入站被拒）：发一个回退应答，让它反过来连我。
                 discovery?.announceFallback()
+                officialLocalSendDiscovery?.announceFallback()
                 return@launch
             }
             val info = runCatching {
@@ -414,7 +495,7 @@ class TransferEngine(
 
     /** Announce + optionally scan local /24 subnets when multicast is unavailable. */
     fun scan() {
-        discovery?.announceNow()
+        announceNow()
         val config = configProvider()
         scope.launch(Dispatchers.IO) {
             val addresses = NetworkInterfaces.ipv4Addresses(config.networkWhitelist, config.networkBlacklist)
@@ -428,7 +509,9 @@ class TransferEngine(
                         val ip = "$prefix.$index"
                         if (ip == ownIp) continue
                         launch {
-                            semaphore.withPermit { probe(ip, config.port, config.discoveryTimeoutMs) }
+                            val scanPort = if (config.bp2Enabled && config.port == Protocol.DEFAULT_PORT)
+                                Protocol.LOCALSEND_PORT else config.port
+                            semaphore.withPermit { probe(ip, scanPort, config.discoveryTimeoutMs) }
                         }
                     }
                 }
@@ -468,8 +551,8 @@ class TransferEngine(
                     deviceModel = device.deviceModel,
                     deviceType = device.deviceType,
                     download = device.download,
-                    channels = (existing.channels + device.channels)
-                        .distinctBy { it.host to it.port to it.https },
+                    channels = (device.channels + existing.channels)
+                        .distinctBy { listOf(it.adapterId, it.host, it.port, it.https) },
                     lastSeen = System.currentTimeMillis(),
                 )
             }
@@ -486,7 +569,7 @@ class TransferEngine(
 
     override fun localInfo(): RegisterRequest = configProvider().toRegisterRequest()
         .copy(port = actualPort, download = shareServer != null,
-            sendeeCapabilities = listOf(Protocol.STREAMING_CHECKSUM))
+            sendeeCapabilities = if (configProvider().bp2Enabled) null else listOf(Protocol.STREAMING_CHECKSUM))
 
     override fun showToken(): String = configProvider().showToken
 
@@ -540,7 +623,7 @@ class TransferEngine(
         clientFingerprint: String?,
     ): PrepareUploadOutcome = receiveMutex.withLock {
         val config = configProvider()
-        if (receiveSession != null) return@withLock PrepareUploadOutcome.Busy
+        if (receiveSession != null || bp2Adapter?.isReceiving == true) return@withLock PrepareUploadOutcome.Busy
 
         if (config.receivePin != null) {
             val now = System.currentTimeMillis()
@@ -556,6 +639,8 @@ class TransferEngine(
         }
 
         if (request.files.isEmpty()) return@withLock PrepareUploadOutcome.Rejected("No files provided")
+        if (config.bp2Enabled && request.files.values.any { it.sendeeChecksum != null })
+            return@withLock PrepareUploadOutcome.Invalid("Boxlet extensions are not available on the LocalSend compatibility endpoint")
         if (request.files.values.any {
                 it.sendeeChecksum != null && (it.sendeeChecksum != Protocol.STREAMING_CHECKSUM ||
                     it.size < 0 || it.size > Long.MAX_VALUE - 32 ||
@@ -630,18 +715,20 @@ class TransferEngine(
         }
 
         val acceptedIds = session.decision.await()
-        _state.update { it.copy(pendingReceive = null) }
+        _state.update { it.copy(pendingReceive = it.pendingReceive?.takeUnless { pending -> pending.sessionId == session.id }) }
 
         if (acceptedIds.isNullOrEmpty()) {
-            receiveSession = null
-            _state.update { it.copy(incoming = null) }
+            if (receiveSession === session) receiveSession = null
+            _state.update { it.copy(incoming = it.incoming?.takeUnless { incoming -> incoming.sessionId == session.id && incoming.status != TransferStatus.CANCELLED }) }
             return@withLock PrepareUploadOutcome.Rejected("Rejected")
         }
 
         session.accepted = true
         _state.update { current ->
             current.copy(
-                incoming = current.incoming?.copy(status = TransferStatus.TRANSFERRING),
+                incoming = current.incoming?.let {
+                    if (it.sessionId == session.id) it.copy(status = TransferStatus.TRANSFERRING) else it
+                },
             )
         }
         PrepareUploadOutcome.Accepted(
@@ -808,7 +895,8 @@ class TransferEngine(
 
     override suspend fun onCancel(sessionId: String?, remoteIp: String) {
         val session = receiveSession
-        if (session != null && (sessionId == null || session.id == sessionId || session.senderIp == remoteIp)) {
+        if (session != null && session.senderIp == remoteIp &&
+            (session.id == sessionId || sessionId == null)) {
             session.decision.complete(null)
             receiveSession = null
             session.files.values.forEach { file ->
@@ -820,8 +908,10 @@ class TransferEngine(
             }
             _state.update {
                 it.copy(
-                    pendingReceive = null,
-                    incoming = it.incoming?.copy(status = TransferStatus.CANCELLED),
+                    pendingReceive = it.pendingReceive?.takeUnless { pending -> pending.sessionId == session.id },
+                    incoming = it.incoming?.let { incoming ->
+                        if (incoming.sessionId == session.id) incoming.copy(status = TransferStatus.CANCELLED) else incoming
+                    },
                 )
             }
             return
@@ -829,7 +919,8 @@ class TransferEngine(
 
         // The peer cancelled a session that we are sending.
         val outgoing = _state.value.outgoing
-        if (outgoing != null && outgoing.peer.channels.any { it.host == remoteIp }) {
+        if (outgoing?.adapterId == TransferRouter.LOCALSEND && outgoing.peer.channels.any { it.host == remoteIp } &&
+            (outgoing.sessionId == sessionId || outgoing.status == TransferStatus.PREPARING)) {
             cancelSend()
         }
     }
@@ -867,20 +958,24 @@ class TransferEngine(
     // ---------------------------------------------------------------------
 
     fun acceptReceive(fileIds: Set<String>) {
+        if (bp2Adapter?.accept(fileIds) == true) return
         val session = receiveSession ?: return
         session.decision.complete(fileIds)
     }
 
     fun acceptAllReceive() {
+        if (bp2Adapter?.accept() == true) return
         val session = receiveSession ?: return
         session.decision.complete(session.files.keys.toSet())
     }
 
     fun rejectReceive() {
+        if (bp2Adapter?.reject() == true) return
         receiveSession?.decision?.complete(null)
     }
 
     fun cancelReceive() {
+        if (bp2Adapter?.cancelReceive() == true) return
         val session = receiveSession ?: return
         receiveSession = null
         session.decision.complete(null)
@@ -909,30 +1004,62 @@ class TransferEngine(
 
     fun send(fingerprint: String, files: List<OutgoingFile>, pinProvider: PinProvider) {
         if (sendJob?.isActive == true) return
+        if (_state.value.outgoing?.status == TransferStatus.PAUSED) {
+            _state.update { it.copy(error = "请先继续或取消暂停的任务") }; return
+        }
         if (files.isEmpty()) return
         val device = _state.value.devices.firstOrNull { it.fingerprint == fingerprint } ?: return
         sendCancelled.set(false)
-        sendJob = scope.launch(Dispatchers.IO) { runSend(device, files, pinProvider) }
+        val selected = runCatching { route(device) }.getOrElse { error ->
+            _state.update { it.copy(error = error.message) }; return
+        }
+        routedChannel = selected
+        val previousCancellation = cancelNotification
+        sendJob = scope.launch(Dispatchers.IO) {
+            previousCancellation?.join()
+            currentCoroutineContext().ensureActive()
+            if (selected.adapterId == TransferRouter.BOXLET) bp2Adapter?.send(device, selected, files)
+            else runSend(device, files, pinProvider, selected)
+        }
     }
 
     fun cancelSend() {
         val outgoing = _state.value.outgoing ?: return
         sendCancelled.set(true)
-        sendJob?.cancel()
-        updateOutgoing { it.copy(status = TransferStatus.CANCELLED) }
-        scope.launch(Dispatchers.IO) {
-            val channel = outgoing.peer.preferredChannel ?: return@launch
-            api.cancel(channel, outgoing.peer.fingerprint, outgoing.sessionId)
+        if (outgoing.status == TransferStatus.CANCELLED) { sendJob?.cancel(); return }
+        bp2Adapter?.cancelRetainedSend()
+        if (bp2Adapter == null && outgoing.adapterId == TransferRouter.BOXLET) {
+            runCatching { sendJournal?.clear(outgoing.sessionId) }
+                .onFailure { _state.update { it.copy(error = "发送恢复记录清理失败") } }
         }
+        sendJob?.cancel()
+        if (outgoing.adapterId == TransferRouter.LOCALSEND) {
+            val channel = routedChannel
+            if (channel != null) cancelNotification = scope.launch(Dispatchers.IO) {
+                api.cancel(channel, outgoing.peer.fingerprint,
+                    if (outgoing.status == TransferStatus.PREPARING) null else outgoing.sessionId)
+            }
+        }
+        updateOutgoing { it.copy(status = TransferStatus.CANCELLED) }
     }
 
-    private suspend fun runSend(device: Device, files: List<OutgoingFile>, pinProvider: PinProvider) {
+    fun setTransferPaused(outgoing: Boolean, paused: Boolean): Boolean {
+        val state = _state.value
+        val adapter = if (outgoing) state.outgoing?.adapterId else state.incoming?.adapterId
+        val status = if (outgoing) state.outgoing?.status else state.incoming?.status
+        if (adapter != TransferRouter.BOXLET || status !in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED)) return false
+        return bp2Adapter?.setPaused(outgoing, paused) == true
+    }
+
+    fun resetOutgoingFile(fileId: String): Boolean {
+        val transfer = _state.value.outgoing ?: return false
+        if (transfer.adapterId != TransferRouter.BOXLET || transfer.status != TransferStatus.PAUSED) return false
+        return bp2Adapter?.resetFile(fileId) == true
+    }
+
+    private suspend fun runSend(device: Device, files: List<OutgoingFile>, pinProvider: PinProvider, selected: DeviceChannel) {
         val config = configProvider()
-        val channel = device.preferredChannel
-        if (channel == null) {
-            _state.update { it.copy(error = "设备 ${device.alias} 没有可用地址") }
-            return
-        }
+        val channel = selected
         val sessionId = UUID.randomUUID().toString()
         _state.update {
             it.copy(
@@ -956,7 +1083,7 @@ class TransferEngine(
         try {
             // Probe the selected endpoint using the same pinned TLS client as the upload.
             // Missing/unknown capabilities always use the unchanged LocalSend wire format.
-            val streamingChecksum = config.createChecksums && runCatching {
+            val streamingChecksum = !config.bp2Enabled && config.createChecksums && runCatching {
                 val result = api.info(channel, device.fingerprint)
                 result.isSuccessful && Protocol.STREAMING_CHECKSUM in
                     (BoxletJson.decodeFromString(InfoResponse.serializer(), result.body).sendeeCapabilities ?: emptyList())
@@ -1041,7 +1168,7 @@ class TransferEngine(
 
             val prepared = response
             // Cancellation must reference the receiver generated session id.
-            updateOutgoing { it.copy(sessionId = prepared.sessionId) }
+            updateOutgoing { it.copy(sessionId = prepared.sessionId, status = TransferStatus.TRANSFERRING) }
             val tokens = prepared.files
             val accepted = files.filter { tokens.containsKey(it.id) }
             val skipped = files.filterNot { tokens.containsKey(it.id) }
@@ -1088,6 +1215,7 @@ class TransferEngine(
         token: String,
         streamingChecksum: Boolean,
     ) {
+        val uploadContext = currentCoroutineContext()
         var attempt = 0
         while (attempt < Protocol.MAX_UPLOAD_ATTEMPTS) {
             attempt += 1
@@ -1109,10 +1237,13 @@ class TransferEngine(
                     val now = System.currentTimeMillis()
                     if (now - lastUpdate >= 100 || bytes == file.size) {
                         lastUpdate = now
-                        updateOutgoingFile(file.id) { it.copy(bytesTransferred = bytes) }
+                        updateOutgoingFile(file.id) {
+                            if (uploadContext.isActive) it.copy(bytesTransferred = bytes) else it
+                        }
                     }
                 },
             )
+            uploadContext.ensureActive()
 
             when (result.code) {
                 200 -> {

@@ -24,10 +24,13 @@ import kotlinx.coroutines.withTimeout
 import okio.buffer
 import okio.sink
 import okio.source
+import okio.ForwardingSource
 import org.junit.After
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -102,6 +105,8 @@ class NativeTransferThroughputTest {
 
         // 预热 JIT 与页缓存，避免第一轮数字失真
         transfer(source, total, checksums = false, tag = "warmup", expectMinMiB = 0)
+        // 流式校验与无校验经过不同的上传/摘要路径；测量前也必须预热。
+        transfer(source, total, checksums = true, tag = "warmup-streaming", expectMinMiB = 0)
         transfer(source, total, checksums = true, tag = "legacy-prehash", expectMinMiB = floorMiB, legacy = true)
         repeat(2) { pass ->
             transfer(source, total, checksums = true, tag = "checksums#${pass + 1}", expectMinMiB = floorMiB)
@@ -132,12 +137,20 @@ class NativeTransferThroughputTest {
             ),
         )
 
+        val sourceOpens = AtomicInteger()
+        val uploadStarted = AtomicLong()
+        val sourceClosed = AtomicLong()
         val file = OutgoingFile(
             id = "bench",
             fileName = "bench.bin",
             size = total,
             mimeType = "application/octet-stream",
-            openSource = { source.source() },
+            openSource = {
+                if (sourceOpens.incrementAndGet() == if (legacy) 2 else 1) uploadStarted.set(System.nanoTime())
+                object : ForwardingSource(source.source()) {
+                    override fun close() { super.close(); sourceClosed.set(System.nanoTime()) }
+                }
+            },
         )
         val started = System.nanoTime()
         sender.send(receiverSecurity.fingerprint, listOf(file)) { null }
@@ -153,6 +166,9 @@ class NativeTransferThroughputTest {
         val seconds = (System.nanoTime() - started) / 1_000_000_000.0
         val rate = total / 1048576.0 / seconds
         println("[native] $tag checksums=$checksums ${total shr 20} MiB = ${"%.0f".format(rate)} MiB/s")
+        println("[native-phases] $tag setup=${(uploadStarted.get() - started) / 1_000_000}ms " +
+            "source-transfer=${(sourceClosed.get() - uploadStarted.get()) / 1_000_000}ms " +
+            "publication=${(System.nanoTime() - sourceClosed.get()) / 1_000_000}ms")
         assertEquals(TransferStatus.COMPLETED, outgoing.outgoing?.status, outgoing.outgoing?.error)
         if (expectMinMiB > 0) {
             assertTrue(rate >= expectMinMiB, "$tag regressed to ${"%.0f".format(rate)} MiB/s")

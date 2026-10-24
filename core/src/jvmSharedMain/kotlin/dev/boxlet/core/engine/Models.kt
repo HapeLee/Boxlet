@@ -21,6 +21,8 @@ class OutgoingFile(
      * 只用于在本机界面上做预览（如缩略图），不参与任何传输逻辑，因此缺失时功能不受影响。
      */
     val sourceUri: String? = null,
+    /** Explicit permission to rebuild this selected source after a process restart. */
+    val recoverySource: dev.boxlet.core.protocol.bp2.Bp2SourceRef? = null,
     val openSource: () -> Source,
 ) {
     val isMessage: Boolean get() = preview != null && mimeType.startsWith("text/")
@@ -36,6 +38,7 @@ interface ReceiveDestination {
 
 interface ReceiveStorage {
     suspend fun createDestination(sessionId: String, file: FileDto, senderAlias: String): ReceiveDestination
+    fun bp2ResumeStore(): dev.boxlet.core.session.bp2.Bp2ResumeStore? = null
 }
 
 enum class TransferStatus {
@@ -43,6 +46,7 @@ enum class TransferStatus {
     PREPARING,
     WAITING_FOR_ACCEPT,
     TRANSFERRING,
+    PAUSED,
     COMPLETED,
     FAILED,
     DECLINED,
@@ -70,6 +74,7 @@ data class TransferFileState(
     val error: String? = null,
     val isMessage: Boolean = false,
     val savedPath: String? = null,
+    val restartRequired: Boolean = false,
 )
 
 data class OutgoingTransfer(
@@ -79,6 +84,7 @@ data class OutgoingTransfer(
     val files: List<TransferFileState> = emptyList(),
     val startedAt: Long = System.currentTimeMillis(),
     val error: String? = null,
+    val adapterId: String = "localsend-v2",
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
     val transferredBytes: Long get() = files.sumOf { it.bytesTransferred }
@@ -97,6 +103,7 @@ data class IncomingTransfer(
     val files: List<TransferFileState> = emptyList(),
     val startedAt: Long = System.currentTimeMillis(),
     val error: String? = null,
+    val adapterId: String = "localsend-v2",
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
     val transferredBytes: Long get() = files.sumOf { it.bytesTransferred }
@@ -145,6 +152,7 @@ data class EngineState(
     val share: ShareState? = null,
     val serverRunning: Boolean = false,
     val error: String? = null,
+    val protocols: List<dev.boxlet.core.routing.AdapterState> = emptyList(),
 )
 
 data class ReceiveCompletion(
@@ -154,6 +162,8 @@ data class ReceiveCompletion(
     val savedPath: String?,
     val message: String?,
     val timestamp: Long = System.currentTimeMillis(),
+    val adapterId: String = "localsend-v2",
+    val completionId: String? = null,
 )
 
 data class EngineConfig(
@@ -171,10 +181,14 @@ data class EngineConfig(
     val quickSave: Boolean = false,
     val quickSaveFromFavorites: Boolean = false,
     val receivePin: String? = null,
+    /** Standard LocalSend prehash; false sends without the optional file SHA-256. BP/2 is independent. */
     val createChecksums: Boolean = true,
     val verifyChecksums: Boolean = true,
     val autoAccept: (Device) -> Boolean = { false },
     val showToken: String = "",
+    val bp2Enabled: Boolean = false,
+    val bp2Port: Int = dev.boxlet.core.protocol.bp2.Bp2.PORT,
+    val bp2TrustedPeers: Set<String> = emptySet(),
 ) {
     fun toRegisterRequest(): dev.boxlet.core.protocol.RegisterRequest =
         dev.boxlet.core.protocol.RegisterRequest(

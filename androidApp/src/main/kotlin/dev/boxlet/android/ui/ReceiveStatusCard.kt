@@ -26,7 +26,7 @@ internal fun ReceiveStatusCard(
     val pending = state.pendingReceive
     val phase = when {
         pending != null -> ReceiveVisualState.Request
-        incoming?.status == TransferStatus.TRANSFERRING || incoming?.status == TransferStatus.PREPARING -> ReceiveVisualState.Receiving
+        incoming?.status == TransferStatus.TRANSFERRING || incoming?.status == TransferStatus.PAUSED || incoming?.status == TransferStatus.PREPARING -> ReceiveVisualState.Receiving
         incoming?.status == TransferStatus.COMPLETED -> ReceiveVisualState.Completed
         incoming?.status == TransferStatus.FAILED -> ReceiveVisualState.Failed
         incoming?.status == TransferStatus.CANCELLED -> ReceiveVisualState.Cancelled

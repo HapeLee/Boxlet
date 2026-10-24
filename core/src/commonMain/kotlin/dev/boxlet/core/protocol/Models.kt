@@ -146,6 +146,8 @@ data class DeviceChannel(
     val host: String,
     val port: Int = Protocol.DEFAULT_PORT,
     val https: Boolean = true,
+    val adapterId: String = "localsend-v2",
+    val identityVerified: Boolean = false,
 ) {
     val url: String
         get() {
@@ -168,12 +170,12 @@ data class Device(
     val lastSeen: Long = 0L,
 ) {
     fun withChannel(channel: DeviceChannel): Device {
-        val merged = (channels + channel).distinctBy { it.host to it.port to it.https }
+        val merged = (channels + channel).distinctBy { listOf(it.adapterId, it.host, it.port, it.https) }
         return copy(channels = merged, lastSeen = nowMillis())
     }
 
     val preferredChannel: DeviceChannel?
-        get() = channels.firstOrNull { it.https } ?: channels.firstOrNull()
+        get() = channels.firstOrNull { it.adapterId == "boxlet-bp2" } ?: channels.firstOrNull { it.https } ?: channels.firstOrNull()
 }
 
 internal fun RegisterRequest.toDevice(channel: DeviceChannel): Device = Device(

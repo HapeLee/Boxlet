@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.compose.compiler)
 }
 
-// 统一版本号：根工程按 git tag 解析（Matter 风格编码），Android 的 versionCode 就是那个 32 位值。
+// 统一版本号：根工程按 git tag 解析，versionCode = major * 10000 + minor * 100 + patch。
 val boxletVersionName = rootProject.extra["boxletVersionName"] as String
 val boxletVersionCode = rootProject.extra["boxletVersionCode"] as Int
 

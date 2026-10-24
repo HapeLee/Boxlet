@@ -21,6 +21,7 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 
@@ -31,6 +32,7 @@ internal class HttpRequestHead(
     val headers: Map<String, String>,
     val contentLength: Long,
     val chunked: Boolean,
+    val version: String,
 )
 
 class HttpCall internal constructor(
@@ -95,6 +97,7 @@ class LocalSendHttpServer(
     private var serverSocket: java.net.ServerSocket? = null
     private var acceptJob: Job? = null
     private val connectionPermits = Semaphore(64)
+    private val clients = ConcurrentHashMap.newKeySet<java.net.Socket>()
 
     @Volatile
     var isRunning: Boolean = false
@@ -133,13 +136,17 @@ class LocalSendHttpServer(
                 } catch (error: IOException) {
                     if (!isActive || socket.isClosed) break else continue
                 }
-                launch {
+                if (clients.size >= 128) { client.close(); continue }
+                clients += client
+                val worker = launch {
                     connectionPermits.withPermit {
                         client.use {
                             runCatching { handleConnection(it) }
                         }
                     }
                 }
+                // Also runs if cancellation wins before the worker starts or acquires a permit.
+                worker.invokeOnCompletion { clients -= client; runCatching { client.close() } }
             }
         }
 
@@ -152,10 +159,13 @@ class LocalSendHttpServer(
         acceptJob = null
         runCatching { serverSocket?.close() }
         serverSocket = null
+        clients.forEach { runCatching { it.close() } }
+        clients.clear()
     }
 
     private suspend fun handleConnection(client: java.net.Socket) {
         client.soTimeout = 20_000
+        client.tcpNoDelay = true
         val ssl = client as? SSLSocket
         ssl?.startHandshake()
 
@@ -170,10 +180,11 @@ class LocalSendHttpServer(
             } catch (_: EOFException) {
                 break
             } catch (_: IOException) {
+                writeResponse(output, HttpResponse.json(400, """{"message":"Invalid HTTP request"}"""), false)
                 break
             } ?: break
 
-            val bodyStream: InputStream = when {
+            val bodyStream: HttpRequestBody = when {
                 head.chunked -> ChunkedInputStream(input)
                 head.contentLength > 0 -> LimitedInputStream(input, head.contentLength)
                 else -> LimitedInputStream(input, 0)
@@ -197,10 +208,8 @@ class LocalSendHttpServer(
                 HttpResponse.json(500, """{"message":"Internal server error"}""")
             }
 
-            // Draining unread body bytes keeps the connection reusable.
-            runCatching { drain(bodyStream) }
-
-            val keepAlive = shouldKeepAlive(head, response)
+            // Never wait for a rejected request's remaining payload, or parse it as another request.
+            val keepAlive = bodyStream.complete && shouldKeepAlive(head, response)
             writeResponse(output, response, keepAlive)
             if (!keepAlive) break
         }
@@ -208,10 +217,12 @@ class LocalSendHttpServer(
 
     private fun shouldKeepAlive(head: HttpRequestHead, response: HttpResponse): Boolean {
         if (response.stream != null && response.streamLength == null) return false
-        val connection = head.headers["connection"]?.lowercase()
-        if (connection == "close") return false
-        if (connection == "keep-alive") return true
-        return true
+        val responseClose = response.headers.any { (name, value) -> name.equals("connection", true) &&
+            value.split(',').any { it.trim().equals("close", true) } }
+        if (responseClose) return false
+        val connection = head.headers["connection"].orEmpty().split(',').map { it.trim().lowercase() }
+        if ("close" in connection) return false
+        return head.version == "HTTP/1.1" || "keep-alive" in connection
     }
 
     private fun writeResponse(output: OutputStream, response: HttpResponse, keepAlive: Boolean) {
@@ -219,7 +230,9 @@ class LocalSendHttpServer(
         builder.append("HTTP/1.1 ").append(response.status).append(' ').append(reason(response.status)).append("\r\n")
         response.contentType?.let { builder.append("Content-Type: ").append(it).append("\r\n") }
         builder.append("Connection: ").append(if (keepAlive) "keep-alive" else "close").append("\r\n")
-        response.headers.forEach { (name, value) -> builder.append(name).append(": ").append(value).append("\r\n") }
+        response.headers.filterKeys { !it.equals("connection", true) }.forEach { (name, value) ->
+            builder.append(name).append(": ").append(value).append("\r\n")
+        }
 
         val stream = response.stream
         if (stream != null) {
@@ -240,16 +253,6 @@ class LocalSendHttpServer(
         output.flush()
     }
 
-    private fun drain(body: InputStream) {
-        val buffer = ByteArray(8 * 1024)
-        var total = 0L
-        while (total < 8L * 1024 * 1024) {
-            val read = body.read(buffer)
-            if (read < 0) return
-            total += read
-        }
-    }
-
     private fun reason(status: Int): String = when (status) {
         200 -> "OK"
         204 -> "No Content"
@@ -265,10 +268,11 @@ class LocalSendHttpServer(
     }
 
     private fun readHead(input: InputStream): HttpRequestHead? {
-        val requestLine = readLine(input) ?: return null
+        val requestLine = readHttpLine(input) ?: return null
         if (requestLine.isBlank()) return null
         val parts = requestLine.split(' ')
-        if (parts.size < 2) throw IOException("Malformed request line")
+        if (parts.size != 3 || parts[2] !in setOf("HTTP/1.0", "HTTP/1.1") ||
+            !validHttpFieldName(parts[0]) || !parts[1].startsWith('/')) throw IOException("Malformed request line")
 
         val method = parts[0].uppercase()
         val target = parts[1]
@@ -286,134 +290,35 @@ class LocalSendHttpServer(
         }
 
         val headers = LinkedHashMap<String, String>()
+        var headerBytes = requestLine.length + 2
+        var headerCount = 0
         while (true) {
-            val line = readLine(input) ?: throw EOFException("Unexpected end of headers")
+            val line = readHttpLine(input) ?: throw EOFException("Unexpected end of headers")
+            headerBytes += line.length + 2
+            if (headerBytes > HTTP_HEADER_BYTES) throw IOException("HTTP headers too large")
             if (line.isEmpty()) break
+            if (++headerCount > HTTP_HEADER_COUNT) throw IOException("Too many HTTP headers")
             val index = line.indexOf(':')
-            if (index <= 0) continue
-            headers[line.substring(0, index).trim().lowercase()] = line.substring(index + 1).trim()
+            if (index <= 0 || !validHttpFieldName(line.substring(0, index))) throw IOException("Malformed HTTP field")
+            val name = line.substring(0, index).lowercase()
+            val value = line.substring(index + 1).trim()
+            if (value.any { it.code < 32 && it != '\t' || it.code == 127 }) throw IOException("Invalid HTTP field value")
+            headers[name] = headers[name]?.let { "$it,$value" } ?: value
         }
 
-        val transferEncoding = headers["transfer-encoding"]?.lowercase()
-        val chunked = transferEncoding?.contains("chunked") == true
-        val contentLength = headers["content-length"]?.toLongOrNull() ?: -1L
-        return HttpRequestHead(method, path, query, headers, contentLength, chunked)
-    }
-
-    private fun readLine(input: InputStream): String? {
-        val buffer = java.io.ByteArrayOutputStream(128)
-        while (true) {
-            val value = input.read()
-            if (value < 0) {
-                if (buffer.size() == 0) return null
-                break
-            }
-            if (value == '\n'.code) break
-            if (buffer.size() > 16 * 1024) throw IOException("Header line too long")
-            if (value != '\r'.code) buffer.write(value)
+        val transferEncoding = headers["transfer-encoding"]
+        val lengths = headers["content-length"]?.split(',')?.map { value ->
+            val decimal = value.trim()
+            if (decimal.isEmpty() || decimal.any { it !in '0'..'9' }) throw IOException("Invalid Content-Length")
+            decimal.toLongOrNull() ?: throw IOException("Content-Length overflow")
         }
-        return buffer.toString(StandardCharsets.ISO_8859_1.name())
+        if (lengths?.distinct()?.size?.let { it != 1 } == true) throw IOException("Conflicting Content-Length")
+        if (transferEncoding != null && (lengths != null || parts[2] != "HTTP/1.1" ||
+                !transferEncoding.trim().equals("chunked", true))) throw IOException("Unsupported or ambiguous request framing")
+        return HttpRequestHead(method, path, query, headers, lengths?.first() ?: -1L, transferEncoding != null, parts[2])
     }
 
     private fun decode(value: String): String = runCatching {
         URLDecoder.decode(value, "UTF-8")
     }.getOrDefault(value)
-}
-
-internal fun readAtMost(input: InputStream, maxBytes: Int): ByteArray {
-    val buffer = java.io.ByteArrayOutputStream(minOf(maxBytes, 8192))
-    val chunk = ByteArray(8192)
-    var total = 0
-    while (total < maxBytes) {
-        val read = input.read(chunk, 0, minOf(chunk.size, maxBytes - total))
-        if (read < 0) break
-        buffer.write(chunk, 0, read)
-        total += read
-    }
-    return buffer.toByteArray()
-}
-
-internal class LimitedInputStream(
-    private val delegate: InputStream,
-    private var remaining: Long,
-) : InputStream() {
-    override fun read(): Int {
-        if (remaining <= 0) return -1
-        val value = delegate.read()
-        if (value >= 0) remaining--
-        return value
-    }
-
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (remaining <= 0) return -1
-        val read = delegate.read(buffer, offset, minOf(length.toLong(), remaining).toInt())
-        if (read > 0) remaining -= read
-        return read
-    }
-
-    override fun available(): Int = minOf(remaining, delegate.available().toLong()).toInt()
-}
-
-/** Decodes HTTP/1.1 chunked transfer encoding, which some official clients use for uploads. */
-internal class ChunkedInputStream(private val delegate: InputStream) : InputStream() {
-    private var chunkRemaining = 0L
-    private var finished = false
-
-    override fun read(): Int {
-        val single = ByteArray(1)
-        val read = read(single, 0, 1)
-        return if (read < 0) -1 else single[0].toInt() and 0xFF
-    }
-
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (finished) return -1
-        if (chunkRemaining == 0L) {
-            if (!nextChunk()) return -1
-        }
-        val read = delegate.read(buffer, offset, minOf(length.toLong(), chunkRemaining).toInt())
-        if (read < 0) {
-            finished = true
-            return -1
-        }
-        chunkRemaining -= read
-        if (chunkRemaining == 0L) consumeCrlf()
-        return read
-    }
-
-    private fun nextChunk(): Boolean {
-        val line = readAsciiLine() ?: return false
-        val size = line.substringBefore(';').trim().toLongOrNull(16) ?: return false
-        if (size == 0L) {
-            // Consume optional trailers.
-            while (true) {
-                val trailer = readAsciiLine() ?: break
-                if (trailer.isEmpty()) break
-            }
-            finished = true
-            return false
-        }
-        chunkRemaining = size
-        return true
-    }
-
-    private fun consumeCrlf() {
-        val buffer = ByteArray(2)
-        var read = 0
-        while (read < 2) {
-            val value = delegate.read(buffer, read, 2 - read)
-            if (value < 0) return
-            read += value
-        }
-    }
-
-    private fun readAsciiLine(): String? {
-        val builder = StringBuilder()
-        while (true) {
-            val value = delegate.read()
-            if (value < 0) return if (builder.isEmpty()) null else builder.toString()
-            if (value == '\n'.code) break
-            if (value != '\r'.code) builder.append(value.toChar())
-        }
-        return builder.toString()
-    }
 }

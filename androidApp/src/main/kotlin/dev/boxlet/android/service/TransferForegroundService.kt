@@ -166,6 +166,12 @@ class TransferForegroundService : Service() {
                 key = "out:${outgoing.sessionId}:$percent",
             )
         }
+        if (incoming?.status == TransferStatus.PAUSED) {
+            return Payload("接收已暂停", incoming.peer.alias, key = "paused-in:${incoming.sessionId}")
+        }
+        if (outgoing?.status == TransferStatus.PAUSED) {
+            return Payload("发送已暂停", outgoing.peer.alias, key = "paused-out:${outgoing.sessionId}")
+        }
         if (outgoing != null && outgoing.status == TransferStatus.WAITING_FOR_ACCEPT) {
             return Payload(
                 title = "等待对方接受",

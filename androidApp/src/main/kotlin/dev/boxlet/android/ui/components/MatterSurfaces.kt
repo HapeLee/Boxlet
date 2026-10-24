@@ -60,7 +60,7 @@ fun IdentityHeader(
 /**
  * 内容卡片：直接使用 Matter 的 [MatterCard]（柔和描边、实色底、按下抬高 2dp）。
  *
- * Matter 的卡片不带内边距（由调用方自己加），Sendee 的页面沿用「卡片自带 20dp 内边距」的
+ * Matter 的卡片不带内边距（由调用方自己加），Boxlet 的页面沿用「卡片自带 20dp 内边距」的
  * 习惯，因此这里只加一层薄包装，卡片本体、描边、交互都来自 Matter。
  */
 @Composable

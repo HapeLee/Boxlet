@@ -6,6 +6,7 @@
   <ItemGroup>
     <Content Include="$(JavaRuntimeBundle)\**\*" Condition="'$(JavaRuntimeBundle)' != ''" Link="runtime\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\..\EngineClient.cs" Link="EngineClient.cs" />
+    <Compile Include="..\..\Bp2Endpoint.cs" Link="Bp2Endpoint.cs" />
     <Content Include="..\..\..\engine-host\build\install\engine-host\lib\**\*" Link="engine\lib\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

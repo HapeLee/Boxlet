@@ -3,9 +3,9 @@
 - 状态：已实现
 - 日期：2026-10-23
 
-> 后续定位：这是 SP/2 迁移前的已实现优化，不是长期主协议。依据 [ADR 0008](0008-sendee-primary-protocol.md)，原生/浏览器完成迁移后删除此私有 capability/尾摘要扩展；LocalSend 兼容适配器恢复纯标准格式。当前运行时代码尚未切换。
+> 后续定位：本文保留 BP/2 迁移前的私有扩展设计。原生应用现已默认启用 BP/2，此时 LocalSend 兼容通道使用纯标准格式；仅在关闭 BP/2 且显式协商时保留旧尾摘要扩展。最终清理范围见 [ADR 0008](0008-boxlet-primary-protocol.md)，当前行为见 [LocalSend 实现记录](../protocol/LOCALSEND-IMPLEMENTATION.md)。
 
-原生互传仍使用 LocalSend v2 API。LocalSend 的 SHA-256 位于 prepare-upload 元数据中，必须预读文件。为新版 Sendee 增加显式协商的扩展，保留旧设备的原始上传格式。
+设计时原生互传使用 LocalSend v2 API。标准 LocalSend 的可选 SHA-256 位于 prepare-upload 元数据中，提供该摘要时需要预读文件。本 ADR 增加显式协商的扩展，并保留标准上传格式。
 
 ## 流式 SHA-256
 

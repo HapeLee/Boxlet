@@ -4,11 +4,11 @@
 
 ## 当前主题策略（两个项目同步）
 
-Sendee 与 D:/Project/Matter 均直接使用 MaterialExpressiveTheme 的默认 typography、shapes 和 motionScheme，不再维护 Type.kt 或应用级 Shapes 表。配色设置与定制玻璃组件继续保留。
+Boxlet 与 D:/Project/Matter 均直接使用 MaterialExpressiveTheme 的默认 typography、shapes 和 motionScheme，不再维护 Type.kt 或应用级 Shapes 表。配色设置与定制玻璃组件继续保留。
 
 顶栏随已动画化的玻璃显示进度，在 headlineMediumEmphasized 与 headlineSmallEmphasized 两档主题 TextStyle 之间平滑插值；淡出时反向恢复。Matter 的公共搜索框使用同样规则。没有手写字号或字重，复用原有显隐动画，不叠加第二套延迟。
 
-验证：Sendee assembleDebug 成功，设计规则检查 38 个文件、0 违规；Matter compileDebugKotlin 和 testDebugUnitTest 成功，168 tests、0 failures/errors/skips。Sendee 实机检查了无胶囊及有胶囊两个状态。
+验证：Boxlet assembleDebug 成功，设计规则检查 38 个文件、0 违规；Matter compileDebugKotlin 和 testDebugUnitTest 成功，168 tests、0 failures/errors/skips。Boxlet 实机检查了无胶囊及有胶囊两个状态。
 
 下方为前几轮修改记录；涉及主题包装或固定标题档位的描述以本节为准。
 
@@ -60,9 +60,9 @@ Sendee 与 D:/Project/Matter 均直接使用 MaterialExpressiveTheme 的默认 t
 
 ## 设置项编辑交互
 
-Sendee 的设备名称、端口、设备型号、接收 PIN、多播组与接口黑白名单改为摘要列表项，点击打开 M3 AlertDialog 编辑。草稿使用 rememberSaveable，取消或关闭不提交，保存和 IME Done 共用校验。端口保留 1024–65535 范围；名称及多播组不能为空；PIN 与接收页一致，支持 4–8 位数字或留空关闭，列表不显示明文。目录选择、恢复默认目录和重启服务统一为设置条目。
+Boxlet 的设备名称、端口、设备型号、接收 PIN、多播组与接口黑白名单改为摘要列表项，点击打开 M3 AlertDialog 编辑。草稿使用 rememberSaveable，取消或关闭不提交，保存和 IME Done 共用校验。端口保留 1024–65535 范围；名称及多播组不能为空；PIN 与接收页一致，支持 4–8 位数字或留空关闭，列表不显示明文。目录选择、恢复默认目录和重启服务统一为设置条目。
 
-Matter 设置页原本已使用点击条目和独立编辑面板，本次无需修改。Sendee assembleDebug 和设计规则检查通过；实机确认列表无输入框、对话框自动聚焦、无效端口不提交、取消不改值、重新打开恢复原值及有效确认关闭。未测试修改网络参数后的真实服务重启或目录授权流程；复用原有更新与系统目录选择逻辑。
+Matter 设置页原本已使用点击条目和独立编辑面板，本次无需修改。Boxlet assembleDebug 和设计规则检查通过；实机确认列表无输入框、对话框自动聚焦、无效端口不提交、取消不改值、重新打开恢复原值及有效确认关闭。未测试修改网络参数后的真实服务重启或目录授权流程；复用原有更新与系统目录选择逻辑。
 
 ## 发送与接收尺寸动画（简化版本）
 

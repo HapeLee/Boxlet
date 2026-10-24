@@ -25,6 +25,12 @@
   #endif
 #endif
 
+#if GetEnv("BOXLET_VERSION_SEMVER") != ""
+  #define AppNumericVersion GetEnv("BOXLET_VERSION_SEMVER")
+#else
+  #define AppNumericVersion AppVersion
+#endif
+
 #ifndef AppPublisher
   #define AppPublisher "Boxlet"
 #endif
@@ -37,7 +43,7 @@ AppVersion={#AppVersion}
 AppVerName=Boxlet {#AppVersion}
 AppPublisher={#AppPublisher}
 ; 安装包 exe 的版本资源，脚本传入的已经是 tag 解析出的数值版本（主.次.修订）
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumericVersion}
 
 ; 便携包本身就是自包含的（.NET + Windows App SDK + JDK 运行时），这里只负责落盘与卸载
 DefaultDirName={localappdata}\Programs\Boxlet

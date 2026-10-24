@@ -1,7 +1,7 @@
 name: Release
 
 # 打 tag（v主.次.修订，例如 v1.0.0）即触发：四端构建 -> 生成 GitHub Release -> 发 Telegram。
-# 版本号的唯一来源就是这个 tag，所有产物共用同一个版本号（Matter 风格编码，见根 build.gradle.kts）。
+# 版本号的唯一来源就是这个 tag，所有产物共用同一个版本号（十进制编码，见根 build.gradle.kts）。
 
 on:
   push:

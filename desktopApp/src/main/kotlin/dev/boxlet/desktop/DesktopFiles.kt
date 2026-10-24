@@ -64,6 +64,7 @@ fun File.toOutgoingFile(fileNameOverride: String? = null): OutgoingFile {
         size = length(),
         mimeType = mime,
         modified = Instant.fromEpochMilliseconds(lastModified()),
+        recoverySource = dev.boxlet.core.protocol.bp2.Bp2SourceRef("file", canonicalPath),
         openSource = { source() },
     )
 }

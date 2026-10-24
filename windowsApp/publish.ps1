@@ -1,10 +1,12 @@
 # Build a portable x64 release with .NET, WinUI and an OpenJDK runtime.
-# 版本号默认取 $env:BOXLET_VERSION（CI 与 pack.ps1 都走这条路径），本地没设时用开发基线。
+# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、git tag。
 param([string]$JavaHome, [string]$Version)
 $ErrorActionPreference = 'Stop'
-if (-not $Version) {
-    $Version = if ($env:BOXLET_VERSION) { $env:BOXLET_VERSION } else { '0.1.0' }
-}
+. (Join-Path $PSScriptRoot 'Resolve-Version.ps1')
+$buildVersion = Resolve-BoxletVersion -Version $Version
+$engineVersionArgs = @()
+if ($Version) { $engineVersionArgs += "-PboxletVersion=$Version" }
+$Version = $buildVersion.Display
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Resolve-DotNet.ps1')
 $dotnet = Resolve-BoxletDotNet
@@ -21,9 +23,9 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $destination = Join-Path $root "artifacts/Boxlet-windows-x64-$Version-$stamp"
 Push-Location $root
 try {
-    & .\gradlew.bat :engine-host:installDist --console=plain
+    & .\gradlew.bat @engineVersionArgs :engine-host:installDist --console=plain
     if ($LASTEXITCODE) { throw 'Engine build failed.' }
-    & $dotnet publish windowsApp/Boxlet.Windows.csproj -c Release -p:Platform=x64 -p:Version=$Version -r win-x64 --self-contained true -o $destination --nologo
+    & $dotnet publish windowsApp/Boxlet.Windows.csproj -c Release -p:Platform=x64 "-p:Version=$Version" -r win-x64 --self-contained true -o $destination --nologo
     if ($LASTEXITCODE) { throw 'Publish failed.' }
     if (-not (Test-Path -LiteralPath (Join-Path $destination 'Boxlet.Windows.pri'))) {
         throw 'Published WinUI resource index is missing.'

@@ -28,7 +28,7 @@ object Protocol {
     const val UPLOAD_CONCURRENCY: Int = 2
     const val SMALL_FILE_UPLOAD_CONCURRENCY: Int = 4
     const val SMALL_FILE_BYTES: Long = 1024 * 1024
-    /** Negotiated Sendee extension: file bytes followed by a raw 32-byte SHA-256 digest. */
+    /** Negotiated Boxlet extension: file bytes followed by a raw 32-byte SHA-256 digest. */
     const val STREAMING_CHECKSUM: String = "sha256-trailer-v1"
     const val MAX_PIN_ATTEMPTS: Int = 3
     const val PREPARE_DECISION_TIMEOUT_MS: Long = 60_000

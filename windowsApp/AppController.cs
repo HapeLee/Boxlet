@@ -62,9 +62,12 @@ public sealed class AppController
             var settingsPath = Path.Combine(DataDirectory, "settings.json");
             var saved = File.Exists(settingsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(settingsPath)) : null;
             var port = saved?["port"]?.GetValue<int>() ?? 53318;
+            var bp2Enabled = saved?["bp2Enabled"]?.GetValue<bool>() ?? true;
+            var ports = new HashSet<int> { bp2Enabled && port == 53318 ? 53317 : port };
+            if (bp2Enabled) ports.Add(saved?["bp2Port"]?.GetValue<int>() ?? 53318);
             var occupied = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties()
-                .GetActiveTcpListeners().Any(endpoint => endpoint.Port == port);
-            if (occupied) throw new IOException($"端口 {port} 正被使用。请先从托盘退出原 Compose 客户端，再重新打开 Windows 客户端。");
+                .GetActiveTcpListeners().FirstOrDefault(endpoint => ports.Contains(endpoint.Port));
+            if (occupied is not null) throw new IOException($"端口 {occupied.Port} 正被使用。请先从托盘退出原 Compose 客户端，再重新打开 Windows 客户端。");
             engine.StateReceived += state => dispatcher.TryEnqueue(() => { State = state; Notify(); });
             engine.Failed += error => dispatcher.TryEnqueue(() => { Connected = false; Message(error); });
             engine.Start(DataDirectory);
@@ -109,6 +112,29 @@ public sealed class AppController
         await engine.CallAsync("settings.set", new Dictionary<string, object?> { [key] = value });
         await RefreshSettingsAsync();
         Message("设置已保存");
+    }
+    public async Task TrustBp2Async(string fingerprint, bool trusted)
+    {
+        await engine.CallAsync(trusted ? "bp2.trust-peer" : "bp2.untrust-peer", new { fingerprint = fingerprint.Trim().ToLowerInvariant() });
+        await RefreshSettingsAsync();
+        Message(trusted ? "已添加指纹；请在对端也添加本机指纹" : "已撤销配对");
+    }
+    public async Task ConnectBp2Async(string fingerprint, string address)
+    {
+        var endpoint = Bp2Endpoint.Parse(address);
+        await engine.CallAsync("bp2.connect", new { fingerprint, host = endpoint.Host, port = endpoint.Port });
+        Message("正在连接，请等待设备验证成功");
+    }
+    public string Bp2Status
+    {
+        get {
+            if (!Flag("bp2Enabled")) return "已关闭";
+            var adapter = State["protocols"]?.AsArray().FirstOrDefault(p => p?["adapterId"]?.ToString() == "boxlet-bp2");
+            if (adapter is null) return "正在启动";
+            if (adapter["sendReady"]?.GetValue<bool>() == true && adapter["receiveReady"]?.GetValue<bool>() == true)
+                return adapter["discoveryReady"]?.GetValue<bool>() == true ? "已就绪 · 优先连接已配对设备" : "传输已就绪 · 自动发现不可用，可通过 IP 连接";
+            return adapter["reason"]?.ToString() ?? "尚未就绪";
+        }
     }
     public async Task ImportAsync(IEnumerable<string> paths)
     {

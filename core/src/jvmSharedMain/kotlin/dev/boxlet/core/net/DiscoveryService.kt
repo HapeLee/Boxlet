@@ -28,6 +28,8 @@ data class DiscoveryConfig(
     val download: Boolean,
     val whitelist: List<String>,
     val blacklist: List<String>,
+    /** UDP discovery can use the official port while advertising a different HTTP server port. */
+    val discoveryPort: Int = port,
 )
 
 /**
@@ -51,57 +53,65 @@ class DiscoveryService(
         if (running) return
         val config = configProvider()
         val multicastSocket = MulticastSocket(null as SocketAddress?)
-        multicastSocket.reuseAddress = true
-        multicastSocket.bind(InetSocketAddress(config.port))
-        multicastSocket.timeToLive = 1
-        @Suppress("DEPRECATION")
-        multicastSocket.loopbackMode = true
+        try {
+            multicastSocket.reuseAddress = true
+            multicastSocket.bind(InetSocketAddress(config.discoveryPort))
+            multicastSocket.timeToLive = 1
+            @Suppress("DEPRECATION")
+            multicastSocket.loopbackMode = true
 
-        val group = InetAddress.getByName(config.multicastGroup)
-        val interfaces = NetworkInterfaces.activeInterfaces(config.whitelist, config.blacklist)
-        for (iface in interfaces) {
-            runCatching {
-                multicastSocket.joinGroup(InetSocketAddress(group, config.port), iface)
-                joined += iface to group
-            }
-        }
-
-        socket = multicastSocket
-        running = true
-
-        receiveJob = scope.launch(Dispatchers.IO) {
-            val buffer = ByteArray(64 * 1024)
-            var errors = 0
-            while (isActive && running) {
-                try {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    multicastSocket.receive(packet)
-                    errors = 0
-                    val host = packet.address?.hostAddress?.substringBefore('%') ?: continue
-                    val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
-                    val message = runCatching {
-                        BoxletJson.decodeFromString(MulticastMessage.serializer(), text)
-                    }.getOrNull() ?: continue
-                    if (message.fingerprint.equals(configProvider().fingerprint, ignoreCase = true)) continue
-                    onAnnounce(host, message)
-                } catch (error: SocketException) {
-                    if (!running || multicastSocket.isClosed) break
-                    errors++
-                    if (errors >= 10) {
-                        onFailure(error)
-                        break
-                    }
-                } catch (_: Exception) {
-                    // Malformed datagrams are ignored; keep listening.
+            val group = InetAddress.getByName(config.multicastGroup)
+            val interfaces = NetworkInterfaces.activeInterfaces(config.whitelist, config.blacklist)
+            for (iface in interfaces) {
+                runCatching {
+                    multicastSocket.joinGroup(InetSocketAddress(group, config.discoveryPort), iface)
+                    joined += iface to group
                 }
             }
-        }
 
-        announceJob = scope.launch(Dispatchers.IO) {
-            while (isActive && running) {
-                announceBurst()
-                delay(Protocol.ANNOUNCE_INTERVAL_MS)
+            socket = multicastSocket
+            running = true
+
+            receiveJob = scope.launch(Dispatchers.IO) {
+                val buffer = ByteArray(64 * 1024)
+                var errors = 0
+                while (isActive && running) {
+                    try {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        multicastSocket.receive(packet)
+                        errors = 0
+                        val host = packet.address?.hostAddress?.substringBefore('%') ?: continue
+                        val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                        val message = runCatching {
+                            BoxletJson.decodeFromString(MulticastMessage.serializer(), text)
+                        }.getOrNull() ?: continue
+                        if (message.fingerprint.equals(configProvider().fingerprint, ignoreCase = true)) continue
+                        onAnnounce(host, message)
+                    } catch (error: SocketException) {
+                        if (!running || multicastSocket.isClosed) break
+                        errors++
+                        if (errors >= 10) {
+                            onFailure(error)
+                            break
+                        }
+                    } catch (_: Exception) {
+                        // Malformed datagrams are ignored; keep listening.
+                    }
+                }
             }
+
+            announceJob = scope.launch(Dispatchers.IO) {
+                while (isActive && running) {
+                    announceBurst()
+                    delay(Protocol.ANNOUNCE_INTERVAL_MS)
+                }
+            }
+        } catch (error: Throwable) {
+            multicastSocket.close()
+            socket = null
+            joined.clear()
+            running = false
+            throw error
         }
     }
 
@@ -140,7 +150,7 @@ class DiscoveryService(
         val group = runCatching { InetAddress.getByName(config.multicastGroup) }.getOrNull() ?: return
         val interfaces = NetworkInterfaces.activeInterfaces(config.whitelist, config.blacklist)
         for (iface in interfaces) {
-            send(payload, group, config.port, iface)
+            send(payload, group, config.discoveryPort, iface)
         }
     }
 
@@ -159,7 +169,7 @@ class DiscoveryService(
         val multicastSocket = socket
         socket = null
         joined.forEach { (iface, group) ->
-            runCatching { multicastSocket?.leaveGroup(InetSocketAddress(group, configProvider().port), iface) }
+            runCatching { multicastSocket?.leaveGroup(InetSocketAddress(group, configProvider().discoveryPort), iface) }
         }
         joined.clear()
         runCatching { multicastSocket?.close() }

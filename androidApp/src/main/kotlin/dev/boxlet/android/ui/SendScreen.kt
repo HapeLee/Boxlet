@@ -63,7 +63,7 @@ fun SendScreen(
     val selection by app.sendSelection.collectAsState()
     val sending = state.outgoing?.status in setOf(
         TransferStatus.PREPARING, TransferStatus.WAITING_FOR_ACCEPT,
-        TransferStatus.PIN_REQUIRED, TransferStatus.TRANSFERRING,
+        TransferStatus.PIN_REQUIRED, TransferStatus.TRANSFERRING, TransferStatus.PAUSED,
     )
 
     // 「在线」是相对当前时间算的，没有状态变化就不会重组；定时推进一次，设备下线后文案才会及时变。
@@ -129,7 +129,10 @@ fun SendScreen(
                     status = outgoing.status,
                     error = outgoing.error,
                     files = outgoing.files,
-                    onCancel = if (outgoing.status == TransferStatus.TRANSFERRING ||
+                    onResetFile = { app.engine.resetOutgoingFile(it) },
+                    onTogglePause = if (outgoing.adapterId == "boxlet-bp2" && outgoing.status in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
+                        ({ app.engine.setTransferPaused(true, outgoing.status != TransferStatus.PAUSED) }) else null,
+                    onCancel = if (outgoing.status == TransferStatus.TRANSFERRING || outgoing.status == TransferStatus.PAUSED ||
                         outgoing.status == TransferStatus.PREPARING ||
                         outgoing.status == TransferStatus.WAITING_FOR_ACCEPT
                     ) {
@@ -329,6 +332,7 @@ private fun transferSubtitle(status: TransferStatus): String = when (status) {
     TransferStatus.WAITING_FOR_ACCEPT -> "等待对方接收…"
     TransferStatus.PIN_REQUIRED -> "需要 PIN"
     TransferStatus.TRANSFERRING -> "正在发送"
+    TransferStatus.PAUSED -> "已暂停"
     TransferStatus.COMPLETED -> "发送完成"
     TransferStatus.FAILED -> "发送失败"
     TransferStatus.DECLINED -> "对方拒绝接收"

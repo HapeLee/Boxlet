@@ -64,11 +64,16 @@ engine-host --data-dir <path>
 | `alias` / `port` / `https` / `fingerprint` | 本机信息 |
 | `error` | 当前错误（可被下一次成功操作覆盖） |
 | `devices[]` | `fingerprint / alias / deviceType / deviceModel / lastSeen / channels[]` |
+| `protocols[]` | 各适配器的 `adapterId / enabled / discoveryReady / sendReady / receiveReady / reason`；默认启用 `localsend-v2` 和 `boxlet-bp2`，各服务独立报告实际就绪状态；已有显式关闭配置保持关闭 |
 | `share` | 活动中的浏览器分享：`url / sessionId / fileCount / totalBytes / pinRequired`，无会话时不出现 |
 | `pendingReceive` | 待确认的接收请求；`files[]` 含 `id / fileName / size / fileType` |
-| `outgoing` / `incoming` | `sessionId / peer / status / progress / transferredBytes / totalBytes / error` |
+| `outgoing` / `incoming` | `sessionId / peer / adapterId / status / progress / transferredBytes / totalBytes / error`；adapterId 是实际协议 |
 
-`status` 取值：`preparing`、`waiting_for_accept`、`transferring`、`completed`、`failed`、`declined`、`busy`、`pin_required`、`too_many_attempts`、`cancelled`。
+`devices[].channels[]` 包含 `host / port / https / adapterId / identityVerified`。BP/2 通道仅在已登记证书完成 TLS/HELLO 验证后加入，`identityVerified:true`；原有 LocalSend 通道默认 `adapterId:"localsend-v2"`。发现公告本身不能建立 BP/2 信任。原生 BP/2 数据链路仅使用 TCP/TLS，不提供额外 UDP 数据端口、载体开关或路由字段。
+
+`outgoing/incoming.files[]` 包含 `id / fileName / size / fileType / status / bytesTransferred / savedPath / error`，用于逐文件进度及实际落盘路径。历史按稳定完成 ID 去重，重连查询已完成结果不会重复追加记录。
+
+`status` 取值：`preparing`、`waiting_for_accept`、`transferring`、`paused`、`completed`、`failed`、`declined`、`busy`、`pin_required`、`too_many_attempts`、`cancelled`。
 
 ## 3. 命令
 
@@ -78,7 +83,23 @@ engine-host --data-dir <path>
 {"id":"1","command":"status"}
 ```
 
-返回 `alias / port / https / serverRunning / fingerprint / protocol / deviceCount`。
+返回 `alias / port / https / serverRunning / fingerprint / protocol / deviceCount / bp2Enabled / bp2Port`。`port` 是设置值，实际 LocalSend 监听端口见 `state.port`；`bp2Port` 是实际原生绑定端口，未运行时为 0。`protocol` 保留 LocalSend 兼容版本，不能用它判断任务走哪套协议，应读取任务的 `adapterId`。
+
+### bp2.trust-peer / bp2.untrust-peer / bp2.connect
+
+原生应用与 engine-host 默认启用 BP/2，已有显式关闭设置保持关闭。完整流程见 [BP/2 使用说明](protocol/BP2-EXPERIMENTAL.md)。先通过可信渠道核对双方完整证书指纹，然后在双方分别登记对端：
+
+```json
+{"id":"enable","command":"settings.set","params":{"bp2Enabled":true}}
+{"id":"trust","command":"bp2.trust-peer","params":{"fingerprint":"对端完整64位十六进制指纹"}}
+{"id":"connect","command":"bp2.connect","params":{"host":"192.168.1.20","port":53318,"fingerprint":"对端完整64位十六进制指纹"}}
+{"id":"revoke","command":"bp2.untrust-peer","params":{"fingerprint":"对端完整64位十六进制指纹"}}
+```
+
+- 登记/撤销接受大小写十六进制指纹，持久化后返回 `updated:true`；不允许登记自身。信任修改会重启引擎，中断当前任务并关闭已有连接。
+- `bp2.connect` 要求适配器已启用且指纹已登记，`port` 默认 53318。`started:true` 只表示开始异步连接；等 `state.devices` 中出现已验证 BP/2 通道才表示成功，失败由 `state.error` 报告。
+- 启用 BP/2 后，默认 LocalSend TCP 端口改为 53317，原生监听 53318；自定义端口保持配置值。两者冲突由 `protocols[].reason` 报告，不虚报就绪。
+- `bp2Enabled / bp2Port / bp2TrustedPeers` 均由 Settings 持久化；默认分别为 `true / 53318 / []`。Android、Compose 桌面、WinUI 均有指纹配对界面；普通文件系统支持双方重启续传，Android SAF/MediaStore 接收续传与 WSS 尚未完成。
 
 ### devices.scan
 
@@ -105,6 +126,7 @@ engine-host --data-dir <path>
 
 - `path` 必须是引擎进程可读的本地文件；`name` 可选，用于覆盖展示文件名。
 - 文件在命令返回后异步发送；进度通过 `outgoing` 事件推送。
+- 自动优先可用 BP/2 通道，只有 LocalSend 通道时使用标准 LocalSend。任务中途不会切换适配器；BP/2 身份失败或拒绝不会自动降级重发。
 - 若目标要求 PIN，`outgoing.status` 变为 `pin_required`。原生壳应通过本地 UI 获取 PIN，然后调用：
 
 ```json
@@ -182,6 +204,27 @@ engine-host --data-dir <path>
 {"id":"9","command":"transfer.cancel","params":{"direction":"receive"}}
 ```
 
+### transfer.pause / transfer.continue
+
+只用于活动中的 BP/2 任务，方向必须为 `send` 或 `receive`；LocalSend 没有此能力时返回错误。发送端或接收端均可操作。
+
+```json
+{"id":"pause","command":"transfer.pause","params":{"direction":"send"}}
+{"id":"continue","command":"transfer.continue","params":{"direction":"receive"}}
+```
+
+返回 `started:true` 表示开始异步操作，等待 `state.outgoing/incoming.status` 变为 `paused/transferring` 才表示对端已确认。主动暂停保留连接与原 source，允许有限在途数据收尾，心跳、修复、取消与反向传输照常处理。对持有接收端续传凭证的任务，断线会自动重连三次，耗尽后 PAUSED 也可通过同一 continue 命令恢复；接收端重启可从磁盘恢复；可重开的本地文件任务在发送端重启后恢复为同一 PAUSED 任务，需显式 continue 才连接和读源。源暂时缺失或读取授权失效时保留为暂停，恢复源与权限后可继续；已保留前缀改变时暂停并标记对应文件的 `restartRequired:true`；可恢复原内容后继续，或使用下述 reset-file 明确重传该文件。源大小变化仍需新建任务。恢复失败由 `state.error` 或任务 error 报告。Android、Compose 桌面和 Windows 原生传输卡片提供相应按钮。
+
+源前缀变化后的显式逐文件重传：
+
+```json
+{"id":"reset","command":"transfer.reset-file","params":{"direction":"send","fileId":"state.outgoing.files 中 restartRequired 为 true 的文件 ID"}}
+```
+
+仅允许暂停的 BP/2 发送任务，返回 `started:true` 后观察状态事件。此操作明确选择使用当前源内容，认证重连后只重置对应未发布文件，其他文件保留进度。文件 ID 不使用本地路径或文件名；拒绝任意未标记文件、已完成文件和接收方向。重启后先 continue 重新校验，不自动重放上次的重置意图。重置确认后发生断线，可用普通 continue 从接收端已经清零的新状态恢复。
+
+发送端恢复记录位于原应用数据目录的 `bp2-send/`，用本机 TLS 身份密钥封装 AES-256-GCM 密钥，加密保存凭证、冻结端点、清单与显式 source 引用；不保存源内容，不通过 IPC 暴露凭证。记录只保留一个任务，24 小时过期，完成/取消后清除。重启必须使用原身份与数据目录。损坏记录不会回退重放旧代次；应用目录由独占文件锁保护。Android 仅持久读取授权的文档/目录 source 可重建，临时分享授权不承诺跨重启恢复。
+
 ### settings.get
 
 返回完整 `Settings` JSON。
@@ -194,7 +237,7 @@ engine-host --data-dir <path>
 {"id":"10","command":"settings.set","params":{"alias":"My PC","quickSave":true,"port":53317}}
 ```
 
-`showToken` 不可通过此命令修改。修改端口 / HTTPS / 多播组 / 网络过滤会重启接收服务。
+`showToken` 不可通过此命令修改。修改端口 / HTTPS / 多播组 / 网络过滤 / BP/2 开关、端口或信任集合会重启接收服务，活动任务会中断。
 
 ### favorites.list / add / remove
 
@@ -212,6 +255,8 @@ engine-host --data-dir <path>
 {"id":"14","command":"history.list"}
 {"id":"15","command":"history.clear"}
 ```
+
+每条接收历史包含 `adapterId`，区分 `localsend-v2` 与 `boxlet-bp2`。旧记录没有该字段时按 `localsend-v2` 读取。
 
 ### shutdown
 

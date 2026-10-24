@@ -8,7 +8,7 @@
 #   .\windowsApp\pack.ps1
 #   .\windowsApp\pack.ps1 -Version 1.1.0 -JavaHome C:\path\to\temurin-jdk
 #   .\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-1.1.0-20261022-024934
-# 版本号默认取 $env:BOXLET_VERSION（CI 统一注入），本地没设时用开发基线。
+# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、git tag。
 param(
     [string]$Version,
     [string]$JavaHome,
@@ -18,9 +18,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $Version) {
-    $Version = if ($env:BOXLET_VERSION) { $env:BOXLET_VERSION } else { '0.1.0' }
-}
+. (Join-Path $PSScriptRoot 'Resolve-Version.ps1')
+$requestedVersion = $Version
+$buildVersion = Resolve-BoxletVersion -Version $Version
+$Version = $buildVersion.Display
 $root = Split-Path $PSScriptRoot -Parent
 $artifacts = Join-Path $root 'artifacts'
 if (-not (Test-Path -LiteralPath $artifacts)) {
@@ -31,9 +32,9 @@ if (-not (Test-Path -LiteralPath $artifacts)) {
 if (-not $Source) {
     if ($SkipPublish) { throw 'Pass -Source together with -SkipPublish.' }
     $publish = Join-Path $PSScriptRoot 'publish.ps1'
-    if ($JavaHome) { & $publish -JavaHome $JavaHome } else { & $publish }
+    if ($JavaHome) { & $publish -Version $requestedVersion -JavaHome $JavaHome } else { & $publish -Version $requestedVersion }
     if ($LASTEXITCODE) { throw 'Portable publish failed.' }
-    $Source = Get-ChildItem -LiteralPath $artifacts -Directory -Filter 'Boxlet-windows-x64-*' |
+    $Source = Get-ChildItem -LiteralPath $artifacts -Directory -Filter "Boxlet-windows-x64-$Version-*" |
         Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName
 }
 $exe = if ($Source) { Join-Path $Source 'Boxlet.Windows.exe' } else { $null }
@@ -65,14 +66,17 @@ $isccArgs += (Join-Path $PSScriptRoot 'installer.iss')
 
 $previousSource = $env:BOXLET_APPSOURCE
 $previousVersion = $env:BOXLET_VERSION
+$previousSemver = $env:BOXLET_VERSION_SEMVER
 $env:BOXLET_APPSOURCE = $Source
 $env:BOXLET_VERSION = $Version
+$env:BOXLET_VERSION_SEMVER = $buildVersion.Semver
 try {
     & $Iscc @isccArgs
     if ($LASTEXITCODE) { throw 'Installer compilation failed.' }
 } finally {
     $env:BOXLET_APPSOURCE = $previousSource
     $env:BOXLET_VERSION = $previousVersion
+    $env:BOXLET_VERSION_SEMVER = $previousSemver
 }
 
 $setup = Join-Path $artifacts "Boxlet-Setup-$Version-x64.exe"

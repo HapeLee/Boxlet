@@ -92,7 +92,7 @@ fun resolveBoxletVersion(): BoxletVersionInfo {
     } else {
         val described = boxletGit("describe", "--tags", "--match", "v[0-9]*", "--dirty")
         if (described != null) {
-            parse(described, null)
+            parse(described, boxletGit("rev-parse", "--short=7", "HEAD"))
         } else {
             // 还没有任何 v* tag：按 0.1.0 作为开发基线（Android versionCode 不能为 0）。
             BoxletVersionInfo(

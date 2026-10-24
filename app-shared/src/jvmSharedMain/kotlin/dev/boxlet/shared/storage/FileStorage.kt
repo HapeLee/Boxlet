@@ -18,8 +18,13 @@ import java.util.UUID
  * java.io + Okio APIs so the class is also safe to link on Android (even if unused).
  */
 class FileSystemReceiveStorage(
+    private val resumeDirectory: File? = null,
     private val directoryProvider: () -> File,
 ) : ReceiveStorage {
+
+    override fun bp2ResumeStore(): dev.boxlet.core.session.bp2.Bp2ResumeStore? = resumeDirectory?.let { directory ->
+        dev.boxlet.core.session.bp2.Bp2ResumeStore(directory, directoryProvider()).takeIf { it.available() }
+    }
 
     init {
         // 上次进程被强杀时可能留下半截临时文件；启动时扫一遍，别让它们堆着。

@@ -66,8 +66,14 @@ fun main() {
         val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
         val app = remember {
             lateinit var instance: BoxletApp
-            val storage = FileSystemReceiveStorage {
-                val configured = instance.state.value.settings.destination
+            var runningApp: BoxletApp? = null
+            val startupDestination = runCatching {
+                dev.boxlet.core.protocol.BoxletJson.decodeFromString(dev.boxlet.shared.Settings.serializer(),
+                    File(DesktopEnvironment.dataDir, "settings.json").readText(Charsets.UTF_8)).destination
+            }.getOrNull()
+            val storage = FileSystemReceiveStorage(File(DesktopEnvironment.dataDir, "bp2-receive")) {
+                val current = runningApp
+                val configured = if (current == null) startupDestination else current.currentSettings.destination
                 if (configured != null) File(configured) else DesktopEnvironment.defaultDownloadDir
             }
             instance = BoxletApp(
@@ -76,6 +82,7 @@ fun main() {
                 storage = storage,
                 defaults = DesktopEnvironment.defaultSettings,
             )
+            runningApp = instance
             instance
         }
         val windowState = rememberWindowState(width = 1180.dp, height = 780.dp)

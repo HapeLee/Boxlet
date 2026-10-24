@@ -23,9 +23,10 @@ kotlin {
         }
     }
 
-    // 浏览器目标只需要 commonMain 里的协议 DTO，传输层仍是 JVM 专属。
+    // 浏览器复用公共 DTO、BP/2 codec 和摘要；TLS socket 载体仍在 JVM 共享源集。
     wasmJs {
         browser()
+        nodejs()
     }
 
     // Android 与 JVM 共享同一套 JVM API，业务代码集中在此源集。
@@ -46,6 +47,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
+            api(libs.okio)
         }
 
         commonTest.dependencies {
@@ -58,3 +60,32 @@ kotlin {
 kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(
     rootProject.tasks.named("generateBoxletVersionSource"),
 )
+
+// Manual measurement, separate from pass/fail regression tests and their throughput floors.
+tasks.register<JavaExec>("bp2Benchmark") {
+    group = "verification"
+    description = "Compare BP/2 with the standard LocalSend adapter on loopback using identical storage."
+    dependsOn("jvmTestClasses")
+    val compilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    classpath = files(compilation.output.allOutputs, configurations.getByName("jvmTestRuntimeClasspath"))
+    mainClass.set("dev.boxlet.core.Bp2ProtocolBenchmark")
+    args(layout.buildDirectory.file("reports/bp2-protocols.json").get().asFile.absolutePath)
+}
+
+// Keep the existing throughput gates, with each performance class in a fresh JVM so earlier
+// TLS/session tests cannot change its warmup, heap or shared HTTP/coroutine pool state.
+val throughputTest = tasks.register<Test>("throughputTest") {
+    group = "verification"
+    description = "Run the existing throughput floors in isolated JVMs."
+    dependsOn("jvmTestClasses")
+    val compilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    testClassesDirs = compilation.output.classesDirs
+    classpath = files(compilation.output.allOutputs, configurations.getByName("jvmTestRuntimeClasspath"))
+    include("**/*ThroughputTest.class")
+    forkEvery = 1
+    maxParallelForks = 1
+}
+tasks.named<Test>("jvmTest") {
+    exclude("**/*ThroughputTest.class")
+    dependsOn(throughputTest)
+}

@@ -17,6 +17,7 @@ import dev.boxlet.shared.repository.SecurityRepository
 import dev.boxlet.shared.repository.SettingsRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -48,6 +49,7 @@ data class UiState(
     val serverRunning: Boolean = false,
     val error: String? = null,
     val fingerprint: String = "",
+    val protocols: List<dev.boxlet.core.routing.AdapterState> = emptyList(),
 ) {
     val isFavorite: (String) -> Boolean = { fingerprint -> favorites.any { it.fingerprint == fingerprint } }
 }
@@ -57,6 +59,7 @@ class BoxletApp(
     dataDir: File,
     storage: ReceiveStorage,
     private val defaults: Settings,
+    sourceResolver: dev.boxlet.core.session.bp2.Bp2SourceResolver = dev.boxlet.core.session.bp2.Bp2FileSourceResolver,
 ) {
     private val settingsRepository = SettingsRepository(File(dataDir, "settings.json"), scope, defaults)
     private val security = SecurityRepository(File(dataDir, "security.json")).loadOrCreate()
@@ -68,7 +71,8 @@ class BoxletApp(
     val currentHistory get() = historyRepository.entries.value
     val currentFavorites get() = favoritesRepository.entries.value
 
-    val engine = TransferEngine(scope, security, storage)
+    private val sendJournal = dev.boxlet.core.session.bp2.Bp2SendJournal(File(dataDir, "bp2-send"), security, sourceResolver)
+    val engine = TransferEngine(scope, security, storage, sendJournal)
 
     // 发送草稿属于应用会话，切换页面不会丢失；选择内容本身不会触发网络传输。
     private val _sendSelection = MutableStateFlow<List<OutgoingFile>>(emptyList())
@@ -114,6 +118,7 @@ class BoxletApp(
             serverRunning = engineState.serverRunning,
             error = engineState.error,
             fingerprint = security.fingerprint,
+            protocols = engineState.protocols,
         )
     }
 
@@ -129,12 +134,10 @@ class BoxletApp(
     )
 
     init {
+        scope.coroutineContext[kotlinx.coroutines.Job]?.invokeOnCompletion { sendJournal.close() }
         engine.installConfig(::engineConfig)
         engine.onShow = { args -> onShow?.invoke(args) }
-        engine.start()
-        _ready.value = true
-
-        scope.launch {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.completions.collect { completion ->
                 if (!settingsRepository.state.value.saveToHistory) return@collect
                 historyRepository.add(
@@ -146,10 +149,14 @@ class BoxletApp(
                         fileSize = completion.file.size,
                         senderAlias = completion.senderAlias,
                         timestamp = completion.timestamp,
+                        adapterId = completion.adapterId,
+                        completionId = completion.completionId,
                     ),
                 )
             }
         }
+        engine.start()
+        _ready.value = true
     }
 
     private fun engineConfig(): EngineConfig {
@@ -171,6 +178,9 @@ class BoxletApp(
             receivePin = settings.receivePin?.takeIf { it.isNotBlank() },
             createChecksums = settings.createChecksums,
             verifyChecksums = settings.verifyChecksums,
+            bp2Enabled = settings.bp2Enabled,
+            bp2Port = settings.bp2Port,
+            bp2TrustedPeers = settings.bp2TrustedPeers,
             autoAccept = { device ->
                 favoritesRepository.entries.value.any {
                     it.fingerprint.equals(device.fingerprint, ignoreCase = true)
@@ -187,7 +197,9 @@ class BoxletApp(
     fun updateSettings(transform: (Settings) -> Settings) {
         val before = settingsRepository.state.value
         val after = settingsRepository.update(transform)
-        val needsRestart = before.port != after.port ||
+        val needsRestart = before.port != after.port || before.destination != after.destination ||
+            before.bp2Enabled != after.bp2Enabled || before.bp2Port != after.bp2Port ||
+            before.bp2TrustedPeers != after.bp2TrustedPeers ||
             before.https != after.https ||
             before.multicastGroup != after.multicastGroup ||
             before.networkWhitelist != after.networkWhitelist ||
@@ -202,6 +214,19 @@ class BoxletApp(
     fun scan() = engine.scan()
 
     fun announce() = engine.announceNow()
+
+    fun trustBp2Peer(fingerprint: String, trusted: Boolean) {
+        val normalized = fingerprint.trim().lowercase()
+        dev.boxlet.core.protocol.bp2.Bp2.requireFingerprint(normalized)
+        require(!normalized.equals(security.fingerprint, true)) { "Cannot pair with this device itself" }
+        updateSettings { settings -> settings.copy(bp2TrustedPeers = if (trusted)
+            settings.bp2TrustedPeers + normalized else settings.bp2TrustedPeers.filterNot { it.equals(normalized, true) }.toSet()) }
+    }
+
+    fun connectBp2(address: String, fingerprint: String) {
+        val endpoint = parseBp2Endpoint(address)
+        engine.connectBp2(endpoint.host, endpoint.port, fingerprint.trim().lowercase())
+    }
 
     fun sendFiles(fingerprint: String, files: List<OutgoingFile>) {
         engine.send(fingerprint, files, pinProvider = ::awaitPin)
@@ -311,6 +336,7 @@ class BoxletApp(
             return status == TransferStatus.PREPARING ||
                 status == TransferStatus.WAITING_FOR_ACCEPT ||
                 status == TransferStatus.TRANSFERRING ||
+                status == TransferStatus.PAUSED ||
                 status == TransferStatus.PIN_REQUIRED
         }
 }

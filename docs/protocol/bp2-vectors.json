@@ -1,0 +1,152 @@
+{
+  "protocol": "boxlet/2",
+  "version": "2.0",
+  "note": "Each frame fixture starts a separate direction at sequence 1. Hex is lowercase.",
+  "frames": [
+    {
+      "name": "control-ping",
+      "jsonPayload": {
+        "type": "ping",
+        "requestId": "00000000000000000000000000000001"
+      },
+      "hex": "4258503201000020000000000000003e000000000000000000000000000000017b2274797065223a2270696e67222c22726571756573744964223a223030303030303030303030303030303030303030303030303030303030303031227d"
+    },
+    {
+      "name": "data-abc",
+      "streamId": 1,
+      "offset": "0",
+      "fileUtf8": "abc",
+      "hex": "4258503202000020000000010000002300000000000000000000000000000001ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad616263"
+    },
+    {
+      "name": "batch-two-files",
+      "records": [
+        {
+          "streamId": 1,
+          "utf8": "a"
+        },
+        {
+          "streamId": 3,
+          "utf8": "bc"
+        }
+      ],
+      "hex": "42585032030000200000000000000067000000000000000000000000000000010002000000000001000000000000000000000001ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb61000000030000000000000000000000021e0bbd6c686ba050b8eb03ffeedc64fdc9d80947fce821abbe5d6dc8d252c5ac6263"
+    }
+  ],
+  "files": [
+    {
+      "name": "empty",
+      "source": {
+        "utf8": ""
+      },
+      "size": "0",
+      "chunkSha256": [],
+      "contentRoot": "73bcce36dda67254dfa0e1aec620afbb756ea930d1f939244b496cfdf43d400d",
+      "prefixRoots": [
+        {
+          "retainedChunks": "0",
+          "prefixRoot": "fc5f3b426bfdc914dce8c2c8a9ee13ce407f59713893a6afe02aa00d290132b9"
+        }
+      ]
+    },
+    {
+      "name": "abc",
+      "source": {
+        "utf8": "abc"
+      },
+      "size": "3",
+      "chunkSha256": [
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      ],
+      "contentRoot": "199a65b01600bfaaf382e4195082995229569950c1b85ab71b01a4ecba46817c",
+      "prefixRoots": [
+        {
+          "retainedChunks": "0",
+          "prefixRoot": "085e50d98137123f86c15dadad3aab402a39d549434e289c78dc0697857c28c2"
+        },
+        {
+          "retainedChunks": "1",
+          "prefixRoot": "bbf6cf70da156d8db940ec5c33430e021d484d5067d64300f162e0d24e1caf37"
+        }
+      ]
+    },
+    {
+      "name": "one-full-chunk",
+      "source": {
+        "repeatByte": 7,
+        "repeatCount": 1048576
+      },
+      "size": "1048576",
+      "chunkSha256": [
+        "51b12eb838732b786b4d45c660a974ddf3860ae09084fd293fa6e5df46581a6c"
+      ],
+      "contentRoot": "985cace7074ed354ed31b34ac2c05dd18eebad2342e20c284bde136f46ef551a",
+      "prefixRoots": [
+        {
+          "retainedChunks": "0",
+          "prefixRoot": "e169a8f1fa8569aff992b331151b2d79b8672fa192f8cfc62d87371b1b5e26cd"
+        },
+        {
+          "retainedChunks": "1",
+          "prefixRoot": "79b1a7da71801f54a835e5ba43ff6f2ca36ffac3ed55b72f4d9067b4a5b3777b"
+        }
+      ]
+    },
+    {
+      "name": "two-chunks",
+      "source": {
+        "repeatByte": 7,
+        "repeatCount": 1048576,
+        "suffixUtf8": "abc"
+      },
+      "size": "1048579",
+      "chunkSha256": [
+        "51b12eb838732b786b4d45c660a974ddf3860ae09084fd293fa6e5df46581a6c",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      ],
+      "contentRoot": "97488eb37efd209b62d109e9734b67cb93af9d664437845ae1bad05f6c00f3a0",
+      "prefixRoots": [
+        {
+          "retainedChunks": "0",
+          "prefixRoot": "6042f526f86d02e4fabcedace356aacf782cb357d68471e8c2817b1b72f4716f"
+        },
+        {
+          "retainedChunks": "1",
+          "prefixRoot": "8eb2a3d5f86558bb464df33d7415ce378120fb4c6608316be1801766afbbe4a7"
+        },
+        {
+          "retainedChunks": "2",
+          "prefixRoot": "d62a1665e1cb99ce908b076640497cca6e601d83a731cd5c76ca20493ac6f7ab"
+        }
+      ]
+    }
+  ],
+  "manifest": {
+    "entries": [
+      {
+        "kind": "file",
+        "fileId": "00000000000000000000000000000001",
+        "size": "3",
+        "path": "hello.txt",
+        "mime": "text/plain",
+        "modified": "2026-10-23T00:00:00.000Z"
+      },
+      {
+        "kind": "directory",
+        "fileId": "00000000000000000000000000000002",
+        "size": "0",
+        "path": "照片"
+      },
+      {
+        "kind": "text",
+        "fileId": "00000000000000000000000000000003",
+        "size": "3",
+        "path": "message.txt",
+        "mime": "text/plain",
+        "preview": "你好"
+      }
+    ],
+    "canonicalHex": "626f786c65742d6d616e69666573742d763200010000000000000000000000000000000100000000000000030000000968656c6c6f2e7478740000000a746578742f706c61696e00000018323032362d31302d32335430303a30303a30302e3030305a000000000200000000000000000000000000000002000000000000000000000006e785a7e78987000000000000000000000000030000000000000000000000000000000300000000000000030000000b6d6573736167652e7478740000000a746578742f706c61696e0000000000000006e4bda0e5a5bd",
+    "manifestHash": "62f9cd434fb3a139217b5f2759bae8f3b6b0bcdf19969a1623f8abf338576bcb"
+  }
+}

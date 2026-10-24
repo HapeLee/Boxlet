@@ -1,12 +1,16 @@
 # Boxlet
 
-局域网文件互传客户端。主协议方向为 **Sendee Protocol 2（SP/2）**，默认兼容 LocalSend v2.2：统一发现附近设备，发送时自动选择目标支持的协议。
+当前版本：**v1.0.0**。变更与验证边界见 [更新记录](CHANGELOG.md)。
 
-> 协议设计已确定，运行时迁移尚未完成：当前原生互传仍走 LocalSend v2.2 + 流式校验扩展，浏览器仍使用 SP/1。目标协议与阶段计划见 [SP/2 规范](docs/SENDEE-PROTOCOL-2.md) 和 [ADR 0008](docs/adr/0008-sendee-primary-protocol.md)。
+局域网文件互传客户端。原生应用默认启用 **Boxlet Protocol 2（BP/2）**，同时兼容 LocalSend v2.2：统一发现附近设备，已配对 Boxlet 优先使用 BP/2，其他设备自动使用 LocalSend。
+
+> Android、Compose 桌面与 WinUI 的“设置 → Boxlet Protocol 2”提供开关、状态、本机指纹复制、对端指纹登记/撤销及直接 IP 连接。双方须通过可信渠道核对完整指纹并分别添加对方；未配对的发现公告不会自动获得信任。已有显式关闭设置保持关闭。普通文件系统支持双方重启续传；Android 接收端 SAF/MediaStore 恢复与 WSS 待完成，浏览器仍使用 SP/1。见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md)、[BP/2 规范](docs/BOXLET-PROTOCOL-2.md) 和 [ADR 0008](docs/adr/0008-boxlet-primary-protocol.md)。
 
 > 默认 LocalSend 兼容、自动路由及未来 Google Quick Share 的扩展边界见 [ADR 0009](docs/adr/0009-unified-device-discovery-and-routing.md)；Quick Share 尚处研究规划，不是已支持能力。
 
-- **Android**：Jetpack Compose + Material 3，四页式移动端体验；沉浸式边到边 + 液态玻璃顶栏 / 悬浮底栏（`io.github.kyant0:backdrop`，Android 12 以下自动降级为半透明表面）。
+> 2026-10-25：**Boxlet Protocol 2（BP/2）** 已支持双向会话、分页清单、BATCH、流式校验、坏块修复、暂停、有界自动重连续传，以及源前缀变化后的显式逐文件重传。两个独立引擎进程通过 256 MiB 传输中分别重启接收端、发送端后的续传、最终 SHA-256 与文件/历史去重验证；双通道优先 BP/2，仅 LocalSend 设备自动兼容。见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md) 和 [实现记录](docs/protocol/IMPLEMENTATION.md)，原生数据链路统一使用 TCP/TLS，UDP 仅用于设备发现；尚无无线吞吐提速结论。
+
+- **Android**：Jetpack Compose + Material 3，四页式移动端体验；沉浸式边到边 + 液态玻璃顶栏 / 悬浮底栏（`io.github.kyant0:backdrop`，Android 12 及以上）。
 - **Windows 原生桌面**：WinUI 3 + Microsoft.UI.Reactor，系统 Mica、圆角、标题栏与窗口动画；复用 JVM 引擎。构建说明见 [`windowsApp/README.md`](windowsApp/README.md)。
 - **跨平台桌面**：Compose Multiplatform + [compose-fluent-ui](https://github.com/compose-fluent/compose-fluent-ui)，保留 Linux/macOS 及现有 Windows 版本。
 - **核心**：纯 Kotlin/JVM 的协议、证书、发现与传输引擎，不依赖 Compose，可被原生桌面壳复用。
@@ -15,12 +19,15 @@
 
 完整设计、协议细节、版本矩阵与限制见 [`docs/SPEC.md`](docs/SPEC.md)，引擎控制协议见 [`docs/ENGINE-IPC.md`](docs/ENGINE-IPC.md)。
 
+LocalSend 兼容链路的代码边界、取消/连接复用与验证方式见 [实现说明](docs/protocol/LOCALSEND-IMPLEMENTATION.md)。
+
 ## 功能
 
 - UDP 多播自动发现 + `/24` 子网扫描回退（IPv4）
-- HTTPS（自签名证书 + SHA-256 指纹固定 + 双向 TLS），可切换 HTTP
+- BP/2 始终使用双向 TLS 和流式完整性校验；LocalSend 兼容传输可配置 HTTP(S) 和 SHA-256
+- LocalSend 快速发送可跳过预哈希，接收同意后直接上传；默认仍启用发送校验
 - 发送文件、多文件、文件夹（保留相对目录结构）、文本消息；接收确认 / 拒收 / 取消
-- 接收 PIN、每 IP 失败限流（3 次 / 60 秒）
+- LocalSend 接收 PIN、每 IP 失败限流（3 次 / 60 秒）；BP/2 通过双向指纹配对授权并保留接收确认
 - SHA-256 生成与校验（校验失败自动重传，最多 3 次）
 - 浏览器分享：对方无需装客户端，用浏览器打开链接即可下载（独立明文端口 + 可选 PIN）；主端口同时按协议提供 `prepare-download` / `download`
 - SP/1 浏览器接入：一条 WebSocket 顺序发多文件、进程内断点续传、设备列表增量推送
@@ -31,7 +38,7 @@
 - Android 图库保存：图片 →「图片/Boxlet」、视频 →「视频/Boxlet」，其它仍进「下载/Boxlet」
 - Android 分享接收：系统「分享」文件到 Boxlet 后选设备发送
 - Android SAF 目录选择；桌面自定义保存目录
-- 报文格式与 LocalSend v2.2 一致；默认端口 `53318` 与官方错开，便于同机共存，统一为 `53317` 时与官方客户端互通
+- 默认 BP/2 TCP `53318`，LocalSend HTTP(S) TCP `53317`；两套发现同时工作，兼容官方 UDP `53317` 发现；自定义端口保持配置值，发现不可用时报告受限原因
 
 ## 技术栈（2026-10 最新稳定版）
 
@@ -41,12 +48,12 @@
 | Kotlin | 2.4.21 |
 | Compose Multiplatform | 1.12.2 |
 | compose-fluent-ui | 0.1.0 |
-| Android Compose BOM / Material 3 | 2026.09.00 / 1.4.0 |
+| Android Compose BOM / Material 3 | 2026.09.00 / 1.5.0-beta01 |
 | 液态玻璃（Android） | io.github.kyant0:backdrop 2.0.1 |
 | Kotlin Coroutines / Serialization | 1.11.0 / 1.12.0 |
 | OkHttp / Okio | 5.5.0 / 3.18.2 |
 | BouncyCastle | 1.86 |
-| compileSdk / minSdk | 37 / 24 |
+| compileSdk / 应用 minSdk | 37 / 31（核心库 24） |
 
 ## 目录结构
 
@@ -127,18 +134,19 @@ GitHub Release → Telegram 通知；需要的 Actions 密钥与产物清单同�
 
 ## 互通说明
 
-- 新版 Sendee 原生互传支持协商启用的流式 SHA-256：边传边计算，校验通过后保存，省去发送前的完整预读；旧设备自动回退到 LocalSend 预哈希。多文件优先发送小文件，小文件最多四路、大文件最多两路，见 [ADR 0007](docs/adr/0007-streaming-checksum-and-upload-scheduling.md)。
-
-- 默认 TCP/UDP 端口 `53318`（官方客户端为 `53317`），多播组 `224.0.0.167`。
+- 已配对的 BP/2 设备边传边校验，正常首次发送无需预读整个文件；标准 LocalSend 兼容通道在启用发送校验时预哈希，开启“LocalSend 快速发送”则省略整文件摘要。旧私有尾摘要扩展仅在关闭 BP/2 且显式协商时保留，见 [LocalSend 实现记录](docs/protocol/LOCALSEND-IMPLEMENTATION.md)。
+- 默认 BP/2 TCP/UDP 端口 `53318`，LocalSend TCP/UDP `53317`；LocalSend 使用多播组 `224.0.0.167`，BP/2 使用独立发现公告。自定义端口与冲突处理见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md)。
 - 浏览器分享走**独立的明文 HTTP 端口**（系统分配，URL 由应用直接给出）：主服务是 HTTPS + 自签名证书，浏览器无法访问，所以 Download API 必须另开明文端口（见 [ADR 0003](docs/adr/0003-download-api.md)）。
-- 默认开启 HTTPS：RSA-2048 自签名证书（CN=`LocalSend User`），指纹为证书 DER 的 SHA-256 大写十六进制。
-- 服务端使用**可选**客户端证书（浏览器仍可打开 Web 页），客户端始终出示本机证书。
-- 关闭 HTTPS 后使用明文 HTTP，仅建议可信网络。
+- 身份使用 RSA-2048 自签名证书（CN=`LocalSend User`），配对指纹为证书 DER 的 SHA-256 十六进制。
+- BP/2 强制双向 TLS，并验证双方已登记的完整指纹。LocalSend 默认开启 HTTPS，其服务端使用可选客户端证书，客户端出示本机证书。
+- LocalSend 关闭 HTTPS 后使用明文 HTTP，仅建议可信网络；该开关不影响 BP/2。
 - 分享会话期间公告的 `download` 为 `true`，此时主端口的 `prepare-download` / `download` 与分享端口读同一份数据；没有会话时按协议回 403。
 - 接收文件默认保存到应用目录；Android 可在设置中选择 SAF 目录，桌面默认 `~/Downloads/Boxlet`。
 
 ## 已验证
 
+- v1.0.0 本轮：141 项 JVM/Wasm/共享层测试通过（含原有吞吐门槛），Android Debug/Release、Compose 桌面编译、浏览器生产包、引擎构建通过；Windows 两进程互传、双方分别重启续传、显式逐文件重传、最终 SHA-256 与文件/历史去重通过。协议黄金向量和 Android 设计检查通过。
+- 以下为此前版本的界面与真机验证记录；不能替代 v1.0.0 的 Android/Windows 无线与后台场景验收。
 - `:core:jvmTest` 通过：证书指纹、register/info/upload、错误指纹拒绝、422 映射、HTTPS 双向 TLS 与 HTTP 端到端 256 KiB 传输 + SHA-256 校验；分享服务 4 个用例（分享页、`prepare-download` 响应、二进制流、PIN 拒绝）；主端口 Download API 4 个用例（`prepare-download`、二进制流、错误 PIN/未知会话、无会话 403）；SP/1 断线重连续传用例（半截文件不发布、`resumeFrom` 续写后内容一致）。
 - `:androidApp:assembleDebug` 构建通过。
 - `:desktopApp:run` 冒烟启动通过；托盘创建无异常；第二个实例在 7 秒内通过 `/show` 唤起已有窗口后退出，窗口数保持 1。
@@ -152,7 +160,7 @@ GitHub Release → Telegram 通知；需要的 Actions 密钥与产物清单同�
 - 仅 IPv4 发现；IPv6 多播常量已预留但未使用。
 - 浏览器分享页与主端口的 `download` 都不支持 `Range`，中断后需整体重下。
 - 浏览器（SP/1）v1 只能发给 bridge 所在设备，不能接收，也不会被自动发现；跨设备转发经评估暂不做（方案留档在 [ADR 0006](docs/adr/0006-sp1-cross-device-relay.md)）；浏览器下载未实现。
-- 断点续传只在 bridge 进程存活期间有效（半截文件保留 10 分钟），跨进程/跨设备续传没有做。
+- SP/1 断点续传只在 bridge 进程存活期间有效（半截文件保留 10 分钟）；原生 BP/2 的普通文件系统任务已支持双方重启恢复，详见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md)。
 - Android 已用前台服务 + 常驻通知保活，但厂商省电策略仍可能杀掉进程，建议关闭电池优化。
 - 桌面已实现系统托盘、单实例转发与拖拽发送；开机启动、快捷键仍未实现。
 - LocalSend 兼容层无断点续传、暂停与 WebRTC。

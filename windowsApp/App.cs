@@ -209,11 +209,22 @@ class BoxletApp : Component
     static Element Transfer(AppController m, JsonObject t, string direction, Action<Func<Task>> run)
     {
         var status = t["status"]?.ToString() ?? "";
-        var active = status is "transferring" or "preparing" or "waiting_for_accept" or "pin_required";
-        var label = status switch { "transferring" => "正在传输", "preparing" => "正在准备", "waiting_for_accept" => "等待对方接收", "completed" => "已完成", "cancelled" => "已取消", "failed" => "失败", "declined" => "对方拒绝", "pin_required" => "需要 PIN", _ => status };
+        var active = status is "transferring" or "paused" or "preparing" or "waiting_for_accept" or "pin_required";
+        var canPause = t["adapterId"]?.ToString() == "boxlet-bp2" && status is "transferring" or "paused";
+        var label = status switch { "transferring" => "正在传输", "paused" => "已暂停", "preparing" => "正在准备", "waiting_for_accept" => "等待对方接收", "completed" => "已完成", "cancelled" => "已取消", "failed" => "失败", "declined" => "对方拒绝", "pin_required" => "需要 PIN", _ => status };
+        var resets = new List<Element>();
+        if (direction == "send" && status == "paused" && t["files"] is JsonArray files)
+            foreach (var file in files.OfType<JsonObject>().Where(f => f["restartRequired"]?.GetValue<bool>() == true)) {
+                var fileId = file["id"]!.ToString();
+                var resetLabel = $"使用当前内容从头重传：{file["fileName"]}";
+                resets.Add(Button(resetLabel, () => run(() => m.CommandAsync("transfer.reset-file", new { direction, fileId }))).AutomationName(resetLabel));
+            }
         return Ui.Panel(VStack(12, BodyStrong($"{(direction == "send" ? "发送到" : "来自")} {t["peer"]}"), Body(label), Progress((t["progress"]?.GetValue<double>() ?? 0) * 100),
             Caption($"{AppController.Bytes(t["transferredBytes"]?.GetValue<long>() ?? 0)} / {AppController.Bytes(t["totalBytes"]?.GetValue<long>() ?? 0)}"),
-            string.IsNullOrEmpty(t["error"]?.ToString()) ? Empty() : Ui.Wrap(t["error"]!.ToString()), active ? Button("取消传输", () => run(() => m.CommandAsync("transfer.cancel", new { direction }))) : Empty()));
+            string.IsNullOrEmpty(t["error"]?.ToString()) ? Empty() : Ui.Wrap(t["error"]!.ToString()),
+            resets.Count == 0 ? Empty() : VStack(8, resets.ToArray()),
+            HStack(8, canPause ? Button(status == "paused" ? "继续传输" : "暂停传输", () => run(() => m.CommandAsync(status == "paused" ? "transfer.continue" : "transfer.pause", new { direction }))).AutomationName(status == "paused" ? "继续传输" : "暂停传输") : Empty(),
+                active ? Button("取消传输", () => run(() => m.CommandAsync("transfer.cancel", new { direction }))) : Empty())));
     }
     static Element History(AppController m, Action<Func<Task>> run)
     {
@@ -259,19 +270,48 @@ class BoxletApp : Component
                 else { if (key is "alias" or "multicastGroup" && text.Length == 0) throw new InvalidOperationException("此字段不能为空。"); await m.SaveAsync(key, text.Length == 0 ? null : text); }
             })).IsEnabled(m.Connected && !m.Busy && m.Draft(key) != m.SettingText(key))));
         Element Switch(string title, string description, string key) => Ui.Switch(title, description, m.Flag(key), value => run(() => m.SaveAsync(key, value)));
+        Element Bp2Settings()
+        {
+            var items = new List<Element> {
+                BodyStrong("Boxlet Protocol 2"),
+                Switch("优先使用 BP/2", "已配对 Boxlet 使用 BP/2；其他设备自动使用 LocalSend", "bp2Enabled"),
+                Ui.Wrap(m.Bp2Status), Commit("BP/2 端口", "bp2Port", true),
+                Ui.Wrap("双方先核对完整指纹，再分别添加对方。修改配对或协议设置会重启接收服务。"),
+                Ui.Wrap(m.Text("fingerprint")), Button("复制本机指纹", () => AppController.Copy(m.Text("fingerprint"))),
+                Body("已核对的对端指纹"), TextBox(m.Draft("bp2PairFingerprint"), value => m.Edit("bp2PairFingerprint", value)).AutomationName("已核对的对端指纹"),
+                Button("添加配对", () => run(() => m.TrustBp2Async(m.Draft("bp2PairFingerprint"), true))).IsEnabled(m.Connected && !m.Busy)
+            };
+            foreach (var peer in m.Settings["bp2TrustedPeers"]?.AsArray() ?? new JsonArray()) {
+                var fingerprint = peer?.ToString() ?? "";
+                var key = "bp2PeerAddress:" + fingerprint;
+                items.Add(Ui.Wrap(fingerprint));
+                items.Add(Button("撤销配对", () => run(() => m.TrustBp2Async(fingerprint, false))).IsEnabled(m.Connected && !m.Busy));
+                if (m.Flag("bp2Enabled")) {
+                    items.Add(Caption("自动发现不可用时填写 IP 或 主机:端口，默认 53318"));
+                    items.Add(TextBox(m.Draft(key), value => m.Edit(key, value)).AutomationName("对端 IP 或 主机:端口"));
+                    items.Add(Button("直接连接", () => run(() => m.ConnectBp2Async(fingerprint, m.Draft(key)))).IsEnabled(m.Connected && !m.Busy));
+                }
+            }
+            return Ui.Panel(VStack(12, items.ToArray()));
+        }
         var sections = new List<Element> { Ui.Header("设置", "修改会立即生效并保存到本机"),
-            Ui.Panel(VStack(16, BodyStrong("设备"), Commit("设备名称", "alias"), Commit("监听端口", "port", true), Commit("设备型号", "deviceModel"))),
+            Ui.Panel(VStack(16, BodyStrong("设备"), Commit("设备名称", "alias"), Commit("LocalSend 端口", "port", true),
+                m.Flag("bp2Enabled") && m.Settings["port"]?.GetValue<int>() == 53318
+                    ? Caption("启用 BP/2 时，旧默认值 53318 自动使用 53317，避免端口冲突。") : Empty(), Commit("设备型号", "deviceModel"))),
+            Bp2Settings(),
             Ui.Panel(VStack(16, BodyStrong("传输"), Switch("快速保存", "自动接受所有传输请求", "quickSave"), Switch("仅收藏设备自动接收", "只对已收藏设备启用快速保存", "quickSaveFromFavorites"),
-                Switch("发送时计算 SHA-256", "新版 Sendee 边传边校验；兼容设备提前计算", "createChecksums"), Switch("接收时校验 SHA-256", "校验失败时自动重试", "verifyChecksums"), Switch("记录接收历史", "保存收到的文件和消息记录", "saveToHistory"), Commit("接收 PIN（留空关闭）", "receivePin"))),
+                Ui.Switch("LocalSend 快速发送（跳过预哈希）", "接收同意后直接上传，不提供整文件 SHA-256 比对；关闭则启用发送校验。BP/2 照常校验。",
+                    !(m.Settings["createChecksums"]?.GetValue<bool>() ?? true), value => run(() => m.SaveAsync("createChecksums", !value))),
+                Switch("LocalSend 接收校验", "BP/2 完整性校验始终启用", "verifyChecksums"), Switch("记录接收历史", "保存收到的文件和消息记录", "saveToHistory"), Commit("LocalSend 接收 PIN（留空关闭）", "receivePin"))),
             Ui.Panel(VStack(12, BodyStrong("保存目录"), Ui.Wrap(m.Settings["destination"]?.ToString() ?? AppController.DefaultDestination), HStack(8,
                 Button("选择目录", () => run(destination)).IsEnabled(m.Connected), Button("恢复默认", () => run(() => m.SaveAsync("destination", null))).IsEnabled(m.Connected)))),
-            Ui.Panel(VStack(16, BodyStrong("网络"), Switch("HTTPS 加密", "自签名证书与设备指纹校验", "https"), Commit("多播组", "multicastGroup"),
+            Ui.Panel(VStack(16, BodyStrong("网络"), Switch("LocalSend HTTPS 加密", "控制兼容传输；BP/2 始终使用 TLS 加密", "https"), Commit("多播组", "multicastGroup"),
                 Commit("接口白名单（逗号分隔，支持 *）", "networkWhitelist"), Commit("接口黑名单（优先于白名单）", "networkBlacklist"))),
             Ui.Panel(VStack(12, BodyStrong("浏览器接入"), m.State["bridge"] is JsonObject bridge ? VStack(12, Ui.Wrap(bridge["url"]?.ToString() ?? ""), HStack(8,
                 Button("复制地址", () => AppController.Copy(bridge["url"]?.ToString() ?? "")), Button("停止接入", () => run(() => m.CommandAsync("bridge.stop"))))) : Button("开启接入", () => run(() => m.CommandAsync("bridge.start"))).IsEnabled(m.Connected))),
             Ui.Panel(VStack(12, BodyStrong("外观"), ComboBox(["跟随系统", "浅色", "深色"], m.Settings["theme"]?.ToString() switch { "LIGHT" => 1, "DARK" => 2, _ => 0 },
                 index => { var theme = new[] { "SYSTEM", "LIGHT", "DARK" }[Math.Clamp(index, 0, 2)]; if (theme != m.Settings["theme"]?.ToString()) run(() => m.SaveAsync("theme", theme)); }).Width(180))),
-            Ui.Panel(VStack(12, HStack(12, Image("ms-appx:///Assets/BoxletMark.png").AutomationName("Boxlet 包裹图标").Width(48).Height(48), VStack(4, BodyStrong("Boxlet"), Caption("让传输像打包一样简单").Foreground(Theme.SecondaryText))), Body("1.0.0 · Windows 原生客户端"), Caption("兼容 LocalSend v2.2 协议").Foreground(Theme.SecondaryText), Ui.Wrap(m.Text("fingerprint")))) };
+            Ui.Panel(VStack(12, HStack(12, Image("ms-appx:///Assets/BoxletMark.png").AutomationName("Boxlet 包裹图标").Width(48).Height(48), VStack(4, BodyStrong("Boxlet"), Caption("让传输像打包一样简单").Foreground(Theme.SecondaryText))), Body("1.0.0 · Windows 原生客户端"), Caption("Boxlet Protocol 2 · 兼容 LocalSend v2.2").Foreground(Theme.SecondaryText), Ui.Wrap(m.Text("fingerprint")))) };
         if (m.Notice.Length > 0) sections.Insert(1, Ui.Notice(m.Notice));
         return VStack(16, sections.ToArray());
     }

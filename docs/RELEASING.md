@@ -54,8 +54,8 @@ versionCode = major * 10_000 + minor * 100 + patch
 |---|---|---|
 | Android | `versionName` / `versionCode` | 展示版本 / 数值版本（debug 追加 `-debug` 后缀） |
 | Compose 桌面 | `packageVersion` | `major.minor.patch`（MSI/DEB 只接受三段） |
-| Windows 原生 | `Version`（FileVersion / InformationalVersion） | 数值版本 |
-| Windows 安装包 | `AppVersion`、`VersionInfoVersion` | `major.minor.patch` |
+| Windows 原生 | `Version`（FileVersion / InformationalVersion） | 数值资源取三段版本，信息版本保留开发后缀 |
+| Windows 安装包 | `AppVersion` / `VersionInfoVersion` | 展示版本 / `major.minor.patch` |
 | engine-host | jar `MANIFEST` 的 `Implementation-Version` | 展示版本 |
 | 各端 UI | `dev.boxlet.core.BoxletBuild` | 展示版本 + 数值版本（构建期生成） |
 
@@ -67,13 +67,15 @@ versionCode = major * 10_000 + minor * 100 + patch
 
 # 临时覆盖版本号（不依赖 tag），用于本地验证签名包等
 BOXLET_VERSION=1.2.3 ./gradlew :androidApp:assembleRelease
-./gradlew -PboxletVersion=1.2.3 printBoxletVersion
+./gradlew '-PboxletVersion=1.2.3' printBoxletVersion
 ```
 
 版本号解析在根 [`build.gradle.kts`](../build.gradle.kts)：
 优先 `-PboxletVersion`，其次 `BOXLET_VERSION` 环境变量，最后 `git describe --tags --match 'v[0-9]*' --dirty`。
 生成的 `dev.boxlet.core.BoxletBuild` 落在 `build/generated/boxlet/kotlin/`，由
 `:generateBoxletVersionSource` 负责，不要在源码里手写版本常量。
+
+Windows 的 `run.ps1`、`publish.ps1` 与 `pack.ps1` 经 `Resolve-Version.ps1` 调用同一个 Gradle 解析任务；`-Version` 覆盖值也会传给引擎构建，避免界面、引擎和安装包版本不一致。
 
 ## 3. 发布流程
 

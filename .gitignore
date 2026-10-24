@@ -13,6 +13,8 @@ keystore.properties
 captures/
 .DS_Store
 *.log
+__pycache__/
+*.pyc
 artifacts/
 # 打包产物（APK / AAB / mapping 等）
 androidApp/release/

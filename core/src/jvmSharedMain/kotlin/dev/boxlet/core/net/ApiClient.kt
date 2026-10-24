@@ -10,19 +10,22 @@ import dev.boxlet.core.protocol.PrepareUploadResponse
 import dev.boxlet.core.protocol.Protocol
 import dev.boxlet.core.protocol.RegisterRequest
 import dev.boxlet.core.protocol.BoxletJson
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
-import okio.Buffer
-import okio.BufferedSink
-import okio.buffer
-import okio.HashingSink
+import okhttp3.Response
 import java.io.IOException
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class ApiResult(val code: Int, val body: String, val error: String? = null) {
     val isSuccessful: Boolean get() = code in 200..299
@@ -32,34 +35,32 @@ data class ApiResult(val code: Int, val body: String, val error: String? = null)
     }.getOrElse { error ?: "HTTP $code" }
 }
 
-/** Blocking LocalSend HTTP client. Call from Dispatchers.IO. */
+/** LocalSend client: discovery is blocking; preparation and upload follow coroutine cancellation. */
 class ApiClient(private val security: SecurityContext) {
 
-    private val clients = ConcurrentHashMap<String, OkHttpClient>()
+    private data class ClientKey(val https: Boolean, val fingerprint: String?)
+    private val clients = mutableMapOf<ClientKey, OkHttpClient>()
 
     private fun client(channel: DeviceChannel, expectedFingerprint: String?): OkHttpClient {
-        val key = "${channel.https}:${expectedFingerprint?.uppercase()}"
-        return clients.getOrPut(key) {
-            OkHttpClient.Builder()
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .writeTimeout(0, TimeUnit.MILLISECONDS)
-                .retryOnConnectionFailure(false)
-                .followRedirects(false)
-                .followSslRedirects(false)
-                .apply {
-                    if (channel.https) {
-                        val trust = Certificates.clientTrustManager(expectedFingerprint)
-                        sslSocketFactory(
-                            Certificates.clientContext(security, expectedFingerprint).socketFactory,
-                            trust,
-                        )
-                        hostnameVerifier { _, _ -> true }
-                    }
-                }
-                .build()
-        }
+        val key = ClientKey(channel.https, expectedFingerprint?.uppercase())
+        return synchronized(clients) { clients.getOrPut(key) { newClient(channel.https, expectedFingerprint) } }
     }
+
+    private fun newClient(https: Boolean, expectedFingerprint: String?) = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .writeTimeout(0, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .apply {
+            if (https) {
+                val trust = Certificates.clientTrustManager(expectedFingerprint)
+                sslSocketFactory(Certificates.clientContext(security, expectedFingerprint).socketFactory, trust)
+                hostnameVerifier { _, _ -> true }
+            }
+        }
+        .build()
 
     fun register(channel: DeviceChannel, request: RegisterRequest, expectedFingerprint: String?): ApiResult =
         postJson(channel, expectedFingerprint, "/api/localsend/v2/register", BoxletJson.encodeToString(RegisterRequest.serializer(), request), timeoutMs = 4_000)
@@ -67,7 +68,7 @@ class ApiClient(private val security: SecurityContext) {
     fun info(channel: DeviceChannel, expectedFingerprint: String?): ApiResult =
         get(channel, expectedFingerprint, "/api/localsend/v2/info", timeoutMs = 1_500)
 
-    fun prepareUpload(
+    suspend fun prepareUpload(
         channel: DeviceChannel,
         expectedFingerprint: String?,
         request: PrepareUploadRequest,
@@ -77,19 +78,15 @@ class ApiClient(private val security: SecurityContext) {
         timeoutMs: Long = Protocol.PREPARE_DECISION_TIMEOUT_MS + 15_000,
     ): ApiResult {
         val query = pin?.let { "?pin=${encode(it)}" } ?: ""
-        return postJson(
-            channel = channel,
-            expectedFingerprint = expectedFingerprint,
-            path = "/api/localsend/v2/prepare-upload$query",
-            json = BoxletJson.encodeToString(PrepareUploadRequest.serializer(), request),
-            timeoutMs = timeoutMs,
-        )
+        val httpRequest = jsonRequest(channel, "/api/localsend/v2/prepare-upload$query",
+            BoxletJson.encodeToString(PrepareUploadRequest.serializer(), request))
+        return executeCancellable(client(channel, expectedFingerprint), httpRequest, timeoutMs)
     }
 
     fun parsePrepareUpload(result: ApiResult): PrepareUploadResponse =
         BoxletJson.decodeFromString(PrepareUploadResponse.serializer(), result.body)
 
-    fun upload(
+    suspend fun upload(
         channel: DeviceChannel,
         expectedFingerprint: String?,
         sessionId: String,
@@ -106,9 +103,19 @@ class ApiClient(private val security: SecurityContext) {
         )
         val request = Request.Builder()
             .url(url)
-            .post(ProgressRequestBody(file, isCancelled, onProgress, streamingChecksum))
+            .post(LocalSendUploadBody(file, isCancelled, onProgress, streamingChecksum))
             .build()
-        return execute(client(channel, expectedFingerprint), request)
+        return executeCancellable(client(channel, expectedFingerprint), request)
+    }
+
+    /** Retire owned clients on engine stop; subsequent requests create fresh clients on restart. */
+    fun cancelAll() {
+        val retired = synchronized(clients) { clients.values.toList().also { clients.clear() } }
+        retired.forEach {
+            it.dispatcher.cancelAll()
+            it.connectionPool.evictAll()
+            it.dispatcher.executorService.shutdown()
+        }
     }
 
     fun cancel(channel: DeviceChannel, expectedFingerprint: String?, sessionId: String?): ApiResult {
@@ -124,11 +131,7 @@ class ApiClient(private val security: SecurityContext) {
 
     fun show(port: Int, token: String, args: List<String>): ApiResult {
         val channel = DeviceChannel("127.0.0.1", port, https = false)
-        val payload = buildString {
-            append("""{"args":[""")
-            append(args.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" })
-            append("]}")
-        }
+        val payload = buildJsonObject { putJsonArray("args") { args.forEach { add(it) } } }.toString()
         return postJson(channel, null, "/api/localsend/v2/show?token=${encode(token)}", payload, timeoutMs = 1_000)
     }
 
@@ -139,10 +142,7 @@ class ApiClient(private val security: SecurityContext) {
         json: String,
         timeoutMs: Long,
     ): ApiResult {
-        val request = Request.Builder()
-            .url(buildUrl(channel, path))
-            .post(json.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        val request = jsonRequest(channel, path, json)
         return execute(client(channel, expectedFingerprint), request, timeoutMs)
     }
 
@@ -152,59 +152,41 @@ class ApiClient(private val security: SecurityContext) {
     }
 
     private fun execute(client: OkHttpClient, request: Request, timeoutMs: Long = 0): ApiResult {
-        val call = client.newCall(request)
+        val call = newCall(client, request, timeoutMs)
         return try {
-            if (timeoutMs > 0) {
-                call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
-            }
-            call.execute().use { response ->
-                val text = response.body.string()
-                ApiResult(response.code, text)
-            }
+            readResponse(call.execute())
         } catch (error: IOException) {
-            ApiResult(0, "", error.message ?: error.javaClass.simpleName)
+            failure(error)
         }
     }
+
+    private suspend fun executeCancellable(client: OkHttpClient, request: Request, timeoutMs: Long = 0): ApiResult =
+        suspendCancellableCoroutine { continuation ->
+            val call = newCall(client, request, timeoutMs)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) { continuation.resume(failure(e)) }
+                override fun onResponse(call: Call, response: Response) {
+                    val result = try { readResponse(response) }
+                    catch (error: IOException) { failure(error) }
+                    catch (error: Exception) { continuation.resumeWithException(error); return }
+                    continuation.resume(result)
+                }
+            })
+        }
+
+    private fun newCall(client: OkHttpClient, request: Request, timeoutMs: Long) = client.newCall(request).also {
+        if (timeoutMs > 0) it.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun readResponse(response: Response): ApiResult = response.use { ApiResult(it.code, it.body.string()) }
+    private fun failure(error: IOException) = ApiResult(0, "", error.message ?: error.javaClass.simpleName)
+    private fun jsonRequest(channel: DeviceChannel, path: String, json: String) = Request.Builder()
+        .url(buildUrl(channel, path)).post(json.toRequestBody(JSON_MEDIA_TYPE)).build()
 
     private fun buildUrl(channel: DeviceChannel, path: String): String = channel.url + path
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
-
-    private class ProgressRequestBody(
-        private val file: OutgoingFile,
-        private val isCancelled: () -> Boolean,
-        private val onProgress: (Long) -> Unit,
-        private val streamingChecksum: Boolean,
-    ) : RequestBody() {
-        override fun contentType() = "application/octet-stream".toMediaType()
-
-        override fun contentLength(): Long = if (streamingChecksum) Math.addExact(file.size, 32L) else file.size
-
-        override fun writeTo(sink: BufferedSink) {
-            val hashingSink = if (streamingChecksum) HashingSink.sha256(sink) else null
-            val dataSink = hashingSink?.buffer() ?: sink
-            var written = 0L
-            file.openSource().use { source ->
-                val buffer = Buffer()
-                while (true) {
-                    if (isCancelled()) throw IOException("Upload cancelled")
-                    val read = source.read(buffer, 64 * 1024)
-                    if (read == -1L) break
-                    if (read > file.size - written) throw IOException("Source exceeds declared size")
-                    dataSink.write(buffer, read)
-                    written += read
-                    onProgress(written)
-                }
-            }
-            if (written != file.size) {
-                throw IOException("Source size mismatch: expected ${file.size}, read $written")
-            }
-            if (hashingSink != null) {
-                dataSink.flush()
-                sink.write(hashingSink.hash)
-            }
-        }
-    }
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()

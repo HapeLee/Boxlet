@@ -109,6 +109,7 @@ fun contentUriToOutgoingFile(context: Context, uri: Uri): OutgoingFile? {
         size = size,
         mimeType = mime,
         sourceUri = uri.toString(),
+        recoverySource = retainedReadReference(context, uri, uri),
         openSource = { openSafSource(resolver, uri) },
     )
 }
@@ -124,6 +125,7 @@ private fun openSafSource(resolver: android.content.ContentResolver, uri: Uri) =
 fun documentTreeToOutgoingFiles(context: Context, uri: Uri): List<OutgoingFile> {
     val root = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull() ?: return emptyList()
     val resolver = context.contentResolver
+    val grant = retainedReadReference(context, uri, uri)
     val result = mutableListOf<OutgoingFile>()
 
     fun walk(directory: DocumentFile, prefix: String) {
@@ -158,6 +160,7 @@ fun documentTreeToOutgoingFiles(context: Context, uri: Uri): List<OutgoingFile> 
                     size = size,
                     mimeType = mime,
                     sourceUri = fileUri.toString(),
+                    recoverySource = grant?.let { dev.boxlet.core.protocol.bp2.Bp2SourceRef("content-uri", fileUri.toString(), uri.toString()) },
                     openSource = { openSafSource(resolver, fileUri) },
                 )
             }
@@ -166,4 +169,11 @@ fun documentTreeToOutgoingFiles(context: Context, uri: Uri): List<OutgoingFile> 
 
     walk(root, "")
     return result
+}
+
+private fun retainedReadReference(context: Context, uri: Uri, grant: Uri): dev.boxlet.core.protocol.bp2.Bp2SourceRef? {
+    val resolver = context.contentResolver
+    runCatching { resolver.takePersistableUriPermission(grant, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    return if (resolver.persistedUriPermissions.any { it.isReadPermission && it.uri == grant })
+        dev.boxlet.core.protocol.bp2.Bp2SourceRef("content-uri", uri.toString(), grant.toString()) else null
 }

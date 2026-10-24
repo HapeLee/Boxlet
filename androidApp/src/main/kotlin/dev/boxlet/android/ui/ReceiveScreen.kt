@@ -115,6 +115,7 @@ fun ReceiveScreen(
                     subtitle = when (incoming.status) {
                         TransferStatus.WAITING_FOR_ACCEPT -> "等待你确认…"
                         TransferStatus.TRANSFERRING -> "正在接收"
+                        TransferStatus.PAUSED -> "已暂停"
                         TransferStatus.COMPLETED -> "接收完成"
                         TransferStatus.FAILED -> "部分文件接收失败"
                         TransferStatus.CANCELLED -> "传输已取消"
@@ -124,12 +125,14 @@ fun ReceiveScreen(
                     status = incoming.status,
                     error = incoming.error,
                     files = incoming.files,
+                    onTogglePause = if (incoming.adapterId == "boxlet-bp2" && incoming.status in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
+                        ({ app.engine.setTransferPaused(false, incoming.status != TransferStatus.PAUSED) }) else null,
                     footer = if (incoming.status == TransferStatus.COMPLETED) {
                         "已保存到 ${settings.destination?.let(::formatDestination) ?: "下载/Boxlet"}"
                     } else {
                         null
                     },
-                    onCancel = if (incoming.status == TransferStatus.TRANSFERRING) {
+                    onCancel = if (incoming.status == TransferStatus.TRANSFERRING || incoming.status == TransferStatus.PAUSED) {
                         { app.cancelReceive() }
                     } else if (incoming.status == TransferStatus.COMPLETED ||
                         incoming.status == TransferStatus.FAILED ||

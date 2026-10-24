@@ -175,9 +175,11 @@ fun TransferCard(
     modifier: Modifier = Modifier,
     error: String? = null,
     footer: String? = null,
+    onTogglePause: (() -> Unit)? = null,
+    onResetFile: ((String) -> Unit)? = null,
 ) {
     val transferring = status == TransferStatus.TRANSFERRING
-    val busy = transferring ||
+    val busy = transferring || status == TransferStatus.PAUSED ||
         status == TransferStatus.PREPARING ||
         status == TransferStatus.WAITING_FOR_ACCEPT
     val transferred = files.sumOf { it.bytesTransferred }
@@ -221,7 +223,7 @@ fun TransferCard(
             }
         }
         Spacer(Modifier.height(12.dp))
-        if (transferring || status == TransferStatus.COMPLETED) {
+        if (transferring || status == TransferStatus.PAUSED || status == TransferStatus.COMPLETED) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier
@@ -290,6 +292,13 @@ fun TransferCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (status == TransferStatus.PAUSED && onResetFile != null) {
+            files.filter { it.restartRequired }.forEach { file ->
+                TextButton(onClick = { onResetFile(file.id) }) {
+                    Text("使用当前内容从头重传：${file.fileName.substringAfterLast('/')}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
         footer?.takeIf { it.isNotBlank() }?.let { hint ->
             Spacer(Modifier.height(8.dp))
             Text(
@@ -298,9 +307,12 @@ fun TransferCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (onCancel != null) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                TextButton(onClick = onCancel) {
+        if (onCancel != null || onTogglePause != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (onTogglePause != null) TextButton(onClick = onTogglePause) {
+                    Text(if (status == TransferStatus.PAUSED) "继续传输" else "暂停传输")
+                }
+                if (onCancel != null) TextButton(onClick = onCancel) {
                     Text(if (busy) "取消传输" else "关闭")
                 }
             }

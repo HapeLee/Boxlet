@@ -16,6 +16,10 @@ data class Settings(
     val deviceModel: String? = null,
     val port: Int = Protocol.DEFAULT_PORT,
     val https: Boolean = true,
+    /** Native peers prefer authenticated BP/2; LocalSend remains enabled for compatibility. */
+    val bp2Enabled: Boolean = true,
+    val bp2Port: Int = 53318,
+    val bp2TrustedPeers: Set<String> = emptySet(),
     val multicastGroup: String = Protocol.DEFAULT_MULTICAST_GROUP,
     val discoveryTimeoutMs: Long = Protocol.DISCOVERY_TIMEOUT_MS,
     val networkWhitelist: List<String> = emptyList(),
@@ -24,6 +28,7 @@ data class Settings(
     val quickSaveFromFavorites: Boolean = false,
     val receivePin: String? = null,
     val saveToHistory: Boolean = true,
+    /** Optional LocalSend file digest. Quick send is its inverse; BP/2 digests are independent. */
     val createChecksums: Boolean = true,
     val verifyChecksums: Boolean = true,
     val theme: ThemeMode = ThemeMode.SYSTEM,

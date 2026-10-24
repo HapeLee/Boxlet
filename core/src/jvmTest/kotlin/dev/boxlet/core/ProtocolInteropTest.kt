@@ -20,6 +20,7 @@ import dev.boxlet.core.protocol.ProtocolType
 import dev.boxlet.core.protocol.RegisterRequest
 import dev.boxlet.core.protocol.BoxletJson
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -136,7 +137,7 @@ class ProtocolInteropTest {
     }
 
     @Test
-    fun registerInfoAndUpload() {
+    fun registerInfoAndUpload() = runBlocking {
         startServer()
         val client = ApiClient(security)
         val channel = DeviceChannel("127.0.0.1", port, https = true)
@@ -208,7 +209,7 @@ class ProtocolInteropTest {
     }
 
     @Test
-    fun emptyPrepareUploadReturns204() {
+    fun emptyPrepareUploadReturns204() = runBlocking {
         startServer()
         val client = ApiClient(security)
         val channel = DeviceChannel("127.0.0.1", port, https = true)
@@ -222,7 +223,7 @@ class ProtocolInteropTest {
     }
 
     @Test
-    fun checksumMismatchMapsTo422() {
+    fun checksumMismatchMapsTo422() = runBlocking {
         startServer()
         lastUpload = UploadOutcome.ChecksumMismatch
         val client = ApiClient(security)

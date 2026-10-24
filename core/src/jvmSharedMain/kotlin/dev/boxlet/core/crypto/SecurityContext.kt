@@ -35,6 +35,12 @@ data class SecurityContext(
 )
 
 object Certificates {
+    internal fun localStateKeys(context: SecurityContext): java.security.KeyPair {
+        val store = loadKeyStore(context)
+        val certificate = store.getCertificate(KEY_ALIAS)
+        require(fingerprintOf(certificate.encoded).equals(context.fingerprint, true)) { "Local identity mismatch" }
+        return java.security.KeyPair(certificate.publicKey, store.getKey(KEY_ALIAS, KEYSTORE_PASSWORD.toCharArray()) as java.security.PrivateKey)
+    }
 
     /** Generates a fresh RSA-2048 self-signed identity and its uppercase SHA-256 fingerprint. */
     fun generate(): SecurityContext {
