@@ -188,7 +188,8 @@ data class EngineConfig(
     val showToken: String = "",
     val bp2Enabled: Boolean = false,
     val bp2Port: Int = dev.boxlet.core.protocol.bp2.Bp2.PORT,
-    val bp2TrustedPeers: Set<String> = emptySet(),
+    /** Retained only for legacy extension fixtures/benchmarks; never enabled by the application. */
+    val legacyStreamingChecksumEnabled: Boolean = false,
 ) {
     fun toRegisterRequest(): dev.boxlet.core.protocol.RegisterRequest =
         dev.boxlet.core.protocol.RegisterRequest(

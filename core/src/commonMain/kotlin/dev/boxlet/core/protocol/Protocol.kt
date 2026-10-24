@@ -3,19 +3,17 @@ package dev.boxlet.core.protocol
 /**
  * LocalSend v2.2 wire constants.
  *
- * The wire format is compatible with the official clients, but the default port is
- * intentionally [LOCALSEND_PORT] + 1 so Boxlet can coexist with the official app on the
- * same device. Port and multicast group are advertised in every packet, so two Boxlet
- * instances always find each other regardless of the value; only official clients are
- * pinned to [LOCALSEND_PORT]. See `docs/adr/0001-boxlet-default-port.md`.
+ * The application defaults to [LOCALSEND_PORT]. The former Boxlet port [DEFAULT_PORT]
+ * remains for configuration migration and internal BP/2 experiments. Announcements
+ * carry the actual server port; official discovery uses [LOCALSEND_PORT].
  */
 object Protocol {
     const val VERSION: String = "2.2"
 
-    /** Boxlet 默认端口，刻意与官方客户端错开。 */
+    /** 旧 Boxlet 默认端口；应用默认值现为 [LOCALSEND_PORT]。 */
     const val DEFAULT_PORT: Int = 53318
 
-    /** LocalSend 官方客户端固定端口；把发送/接收端口改为此值才与官方客户端互通。 */
+    /** LocalSend 官方发现端口及当前应用默认的 HTTP(S) 监听端口。 */
     const val LOCALSEND_PORT: Int = 53317
 
     const val DEFAULT_MULTICAST_GROUP: String = "224.0.0.167"

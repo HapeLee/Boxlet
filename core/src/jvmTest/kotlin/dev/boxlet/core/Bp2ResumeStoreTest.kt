@@ -50,12 +50,13 @@ class Bp2ResumeStoreTest {
         assertTrue(File(privateRoot, "transfers").listFiles().orEmpty().isEmpty())
     }
 
-    @Test fun localCancellationAndTrustRevocationRemoveOnlyPrivatePartialBytes() {
+    @Test fun localCancellationRemovesOnlyPrivatePartialBytes() {
         val store = store(); val block = ByteArray(Bp2.CHUNK_BYTES) { 7 }
         val value = entry.copy(size = Bp2.CHUNK_BYTES.toString())
         val lease = create(store, listOf(value)); val token = lease.token
         lease.file(value).use { it.append(block, Bp2Digests.sha256(block)); it.checkpoint() }; lease.close()
-        store.cleanup(emptySet())
+        assertFails { store.cancelLocal("4".repeat(64), id) }
+        store.cancelLocal(peer, id)
         assertFails { store.resume(peer, Bp2ResumeTicket(id, hash(listOf(value)), token, setOf(value.fileId))) }
         assertTrue(File(privateRoot, "chunks").walkTopDown().none { it.name == "data.part" })
         val second = create(store); val ticket = ticket(second); second.close()

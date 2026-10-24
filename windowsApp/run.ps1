@@ -1,4 +1,4 @@
-# Developer entry point. End users should launch the portable Boxlet.Windows.exe.
+# Developer entry point. End users should launch the portable Boxlet.exe.
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [switch]$BuildOnly,

@@ -30,15 +30,14 @@ class Bp2EngineTransferTest {
         }
     }
     @AfterTest fun cleanup() { engines.forEach { it.stop() }; scope.cancel() }
-    private fun config(sender: Boolean, quick: Boolean, trusted: Boolean = true) = EngineConfig(
+    private fun config(sender: Boolean, quick: Boolean) = EngineConfig(
         alias = if (sender) "Sender" else "Receiver", deviceModel = "Test", port = 0, quickSave = quick,
         fingerprint = if (sender) senderIdentity.fingerprint else receiverIdentity.fingerprint,
         bp2Enabled = true, bp2Port = 0,
-        bp2TrustedPeers = if (trusted) setOf(if (sender) receiverIdentity.fingerprint else senderIdentity.fingerprint) else emptySet(),
     )
-    private fun engine(sender: Boolean, quick: Boolean = true, trusted: Boolean = true): TransferEngine {
+    private fun engine(sender: Boolean, quick: Boolean = true, configure: (EngineConfig) -> EngineConfig = { it }): TransferEngine {
         return TransferEngine(scope, if (sender) senderIdentity else receiverIdentity, storage).also {
-            it.installConfig { config(sender, quick, trusted) }; it.start(); engines += it
+            it.installConfig { configure(config(sender, quick)) }; it.start(); engines += it
         }
     }
     private fun connect(sender: TransferEngine, receiver: TransferEngine, native: Boolean = true) {
@@ -69,6 +68,87 @@ class Bp2EngineTransferTest {
         assertContentEquals(bytes, saved["large.bin"])
         assertEquals(files.size, saved.size)
         assertEquals("boxlet-bp2", receiver.state.value.incoming?.adapterId)
+    }
+
+    @Test fun unpairedPeersAreDiscoveredAndTransferOnlyAfterReceiveConfirmation() = runBlocking {
+        val receiver = engine(false, quick = false)
+        val sender = engine(true)
+        sender.connectBp2("127.0.0.1", receiver.bp2Port, receiverIdentity.fingerprint)
+        withTimeout(10000) { sender.state.first { state -> state.devices.any { device ->
+            device.fingerprint.equals(receiverIdentity.fingerprint, true) &&
+                device.channels.any { it.adapterId == Bp2.ADAPTER_ID && it.identityVerified }
+        } } }
+        val opens = AtomicInteger()
+        val bytes = ByteArray(Bp2.CHUNK_BYTES + 7) { it.toByte() }
+        sender.send(receiverIdentity.fingerprint, listOf(file("unpaired", bytes, opens))) { null }
+        val pending = withTimeout(10000) { receiver.state.first { it.pendingReceive != null }.pendingReceive!! }
+        assertEquals(0, opens.get(), "Discovery and waiting for consent must not read the source")
+        assertTrue(saved.isEmpty())
+        receiver.acceptReceive(pending.files.map { it.id }.toSet())
+        val result = terminal(sender)
+        assertEquals(TransferStatus.COMPLETED, result.status, result.error)
+        assertEquals(Bp2.ADAPTER_ID, result.adapterId)
+        assertEquals(1, opens.get())
+        assertContentEquals(bytes, saved["unpaired.bin"])
+    }
+
+    @Test fun unpairedTransferCanBeRejectedWithoutReadingOrPublishingFiles() = runBlocking {
+        val receiver = engine(false, quick = false)
+        val sender = engine(true)
+        connect(sender, receiver)
+        val opens = AtomicInteger()
+        sender.send(receiverIdentity.fingerprint, listOf(file("reject-unpaired", byteArrayOf(1), opens))) { null }
+        withTimeout(10000) { receiver.state.first { it.pendingReceive != null } }
+        receiver.rejectReceive()
+        assertEquals(TransferStatus.DECLINED, terminal(sender).status)
+        assertEquals(0, opens.get()); assertTrue(saved.isEmpty())
+    }
+
+
+    @Test fun certificateMustStillMatchTheSelectedEndpoint() = runBlocking {
+        val receiver = engine(false)
+        val sender = engine(true)
+        val wrongFingerprint = "1".repeat(64)
+        sender.addKnownDevice(Device(wrongFingerprint, "Wrong identity", channels = listOf(
+            DeviceChannel("127.0.0.1", receiver.bp2Port, true, Bp2.ADAPTER_ID),
+            DeviceChannel("127.0.0.1", receiver.localInfo().port, true))))
+        val opens = AtomicInteger()
+        sender.send(wrongFingerprint, listOf(file("wrong-pin", byteArrayOf(1), opens))) { null }
+        val result = terminal(sender)
+        assertEquals(TransferStatus.FAILED, result.status)
+        assertEquals(Bp2.ADAPTER_ID, result.adapterId)
+        assertEquals(0, opens.get()); assertTrue(saved.isEmpty()); assertNull(receiver.state.value.pendingReceive)
+    }
+
+    @Test fun favoriteDeviceCanAutoReceiveUsingItsCertificateIdentity() = runBlocking {
+        val receiver = engine(false, quick = false) { settings -> settings.copy(
+            quickSaveFromFavorites = true,
+            autoAccept = { device -> device.fingerprint.equals(senderIdentity.fingerprint, true) },
+        ) }
+        val sender = engine(true)
+        connect(sender, receiver)
+        sender.send(receiverIdentity.fingerprint, listOf(file("favorite", byteArrayOf(2, 3)))) { null }
+        val result = terminal(sender)
+        assertEquals(TransferStatus.COMPLETED, result.status, result.error)
+        assertEquals(Bp2.ADAPTER_ID, result.adapterId)
+        assertContentEquals(byteArrayOf(2, 3), saved["favorite.bin"])
+    }
+
+    @Test fun nonFavoriteWithAFavoriteAliasStillRequiresConfirmation() = runBlocking {
+        val favorite = Device("f".repeat(64), "Sender")
+        val receiver = engine(false, quick = false) { settings -> settings.copy(
+            quickSaveFromFavorites = true,
+            autoAccept = { device -> device.fingerprint.equals(favorite.fingerprint, true) },
+        ) }
+        val sender = engine(true)
+        connect(sender, receiver)
+        val opens = AtomicInteger()
+        sender.send(receiverIdentity.fingerprint, listOf(file("not-favorite", byteArrayOf(1), opens))) { null }
+        val pending = withTimeout(10000) { receiver.state.first { it.pendingReceive != null }.pendingReceive!! }
+        assertEquals(favorite.alias, pending.peer.alias)
+        assertEquals(0, opens.get()); assertTrue(saved.isEmpty())
+        receiver.rejectReceive()
+        assertEquals(TransferStatus.DECLINED, terminal(sender).status)
     }
 
     @Test fun rejectAndCancelUseExistingReceiveActionsWithoutCreatingFiles() = runBlocking {
@@ -105,17 +185,6 @@ class Bp2EngineTransferTest {
         assertContentEquals(byteArrayOf(4), saved["legacy.bin"])
     }
 
-    @Test fun missingTrustFailsWithoutFallingBackToLocalSend() = runBlocking {
-        val receiver = engine(false); val sender = engine(true, trusted = false)
-        connect(sender, receiver)
-        val opens = AtomicInteger()
-        sender.send(receiverIdentity.fingerprint, listOf(file("untrusted", byteArrayOf(1), opens))) { null }
-        val result = terminal(sender)
-        assertEquals(TransferStatus.FAILED, result.status)
-        assertEquals("boxlet-bp2", result.adapterId)
-        assertTrue("AUTH_REQUIRED" in result.error.orEmpty())
-        assertEquals(0, opens.get()); assertTrue(saved.isEmpty()); assertNull(receiver.state.value.pendingReceive)
-    }
 
     @Test fun existingReceiveDialogSupportsSelectiveBp2Acceptance() = runBlocking {
         val receiver = engine(false, quick = false); val sender = engine(true)
@@ -131,12 +200,13 @@ class Bp2EngineTransferTest {
         assertContentEquals(byteArrayOf(1), saved["keep.bin"])
     }
 
-    @Test fun compatibilityDoesNotNegotiatePrivateTrailerWithOlderBoxlet() = runBlocking {
+    @Test fun standardLocalSendDefaultDoesNotNegotiatePrivateTrailerWithOlderBoxlet() = runBlocking {
         val receiver = TransferEngine(scope, receiverIdentity, storage).also {
-            it.installConfig { config(false, true).copy(bp2Enabled = false) }; it.start(); engines += it
+            it.installConfig { config(false, true).copy(bp2Enabled = false, legacyStreamingChecksumEnabled = true) }; it.start(); engines += it
         }
-        val sender = engine(true)
+        val sender = engine(true) { it.copy(bp2Enabled = false) }
         connect(sender, receiver, native = false)
+        assertEquals(0, sender.bp2Port)
         assertTrue(Protocol.STREAMING_CHECKSUM in receiver.localInfo().sendeeCapabilities.orEmpty())
         val opens = AtomicInteger()
         sender.send(receiverIdentity.fingerprint, listOf(file("standard", byteArrayOf(8, 9), opens))) { null }

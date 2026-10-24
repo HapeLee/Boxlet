@@ -133,12 +133,6 @@ fun main(args: Array<String>) {
                     emit(okResponse(id, buildJsonObject { put("started", true) }))
                 }
 
-                "bp2.trust-peer", "bp2.untrust-peer" -> {
-                    val fingerprint = params["fingerprint"]?.jsonPrimitive?.contentOrNull ?: error("fingerprint is required")
-                    app.trustBp2Peer(fingerprint, command == "bp2.trust-peer")
-                    emit(okResponse(id, buildJsonObject { put("updated", true) }))
-                }
-
                 "bp2.connect" -> {
                     require(params.keys.all { it in setOf("host", "port", "fingerprint") }) {
                         "bp2.connect only accepts host, port and fingerprint (TCP/TLS)"

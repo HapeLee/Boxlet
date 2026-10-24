@@ -4,21 +4,11 @@ using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Boxlet.Windows;
 
-foreach (var (address, host, expectedPort) in new[] {
-    (" 192.168.1.2 ", "192.168.1.2", 53318), ("boxlet.local:54321", "boxlet.local", 54321),
-    ("[::1]", "::1", 53318), ("[::1]:54321", "::1", 54321) })
-    if (Bp2Endpoint.Parse(address) != (host, expectedPort)) throw new Exception("Invalid endpoint parsing: " + address);
-foreach (var address in new[] { "", "x:", "x:0", "x:65536", "::1", "x/path", "x/", "x?query", "x#fragment", "user@x", "https://x" }) {
-    try { Bp2Endpoint.Parse(address); }
-    catch (InvalidOperationException) { continue; }
-    throw new Exception("Invalid endpoint accepted: " + address);
-}
-
 var root = Path.Combine(Path.GetTempPath(), "boxlet-ipc-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 var listener = new TcpListener(IPAddress.Loopback, 0);
 listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-await File.WriteAllTextAsync(Path.Combine(root, "settings.json"), new JsonObject { ["port"] = port, ["bp2Port"] = 0, ["alias"] = "Native IPC test", ["https"] = false }.ToJsonString());
+await File.WriteAllTextAsync(Path.Combine(root, "settings.json"), new JsonObject { ["port"] = port, ["bp2Enabled"] = true, ["bp2Port"] = 0, ["alias"] = "Native IPC test", ["https"] = false }.ToJsonString());
 try
 {
     var engine = new EngineClient();
@@ -32,9 +22,13 @@ try
         if (responses.Any(r => r?["alias"]?.ToString() != "Native IPC test")) throw new Exception("Response correlation failed");
         await engine.CallAsync("settings.set", new { alias = "中文 IPC ✓" });
         var settings = await engine.CallAsync("settings.get");
-        if (settings?["bp2Enabled"]?.GetValue<bool>() != true ||
-            (await engine.CallAsync("status"))?["bp2Port"]?.GetValue<int>() is not > 0)
-            throw new Exception("Native BP/2 must start by default when the setting is absent");
+        if (settings?["bp2Enabled"]?.GetValue<bool>() != false ||
+            (await engine.CallAsync("status"))?["bp2Port"]?.GetValue<int>() != 0)
+            throw new Exception("The product must migrate to LocalSend without starting BP/2");
+        using var defaultHttp = new HttpClient(new HttpClientHandler { UseProxy = false });
+        var localInfo = await defaultHttp.GetStringAsync($"http://127.0.0.1:{port}/api/localsend/v2/info");
+        if (JsonNode.Parse(localInfo)?["sendeeCapabilities"] is JsonArray capabilities && capabilities.Count > 0)
+            throw new Exception("The default LocalSend endpoint must not advertise private extensions");
         if (settings?["alias"]?.ToString() != "中文 IPC ✓") throw new Exception("UTF-8 settings round trip failed: " + settings?.ToJsonString());
         try { await engine.CallAsync("unknown.test.command"); throw new Exception("Expected protocol failure"); }
         catch (IOException e) when (e.Message.Contains("Unknown command")) { }
@@ -59,13 +53,13 @@ try
         await engine.CallAsync("bridge.stop");
 
         // Real native BP/2 transfer between two separate JVM processes, through the same
-        // settings/trust/discovery/send entry points used by the desktop shell.
+        // settings/discovery/send entry points used by the desktop shell, without manual pairing.
         var peerRoot = Path.Combine(root, "bp2-peer");
         var peerReceived = Path.Combine(peerRoot, "received");
         Directory.CreateDirectory(peerRoot);
         await File.WriteAllTextAsync(Path.Combine(peerRoot, "settings.json"), new JsonObject
         {
-            ["port"] = 0, ["bp2Enabled"] = true, ["bp2Port"] = 0, ["https"] = false,
+            ["port"] = 0, ["bp2Enabled"] = true, ["bp2Port"] = 0, ["https"] = false, ["protocolDefaultsVersion"] = 1,
             ["quickSave"] = true, ["alias"] = "BP2 IPC peer", ["destination"] = peerReceived,
         }.ToJsonString());
         await using var peer = new EngineClient();
@@ -74,12 +68,8 @@ try
         peer.Start(peerRoot);
         await peerReady.Task.WaitAsync(TimeSpan.FromSeconds(20));
         var peerStatus = await peer.CallAsync("status");
-        var ownStatus = await engine.CallAsync("status");
         var peerFingerprint = peerStatus?["fingerprint"]?.ToString() ?? throw new Exception("Missing peer fingerprint");
-        var ownFingerprint = ownStatus?["fingerprint"]?.ToString() ?? throw new Exception("Missing sender fingerprint");
         await engine.CallAsync("settings.set", new { port = 0, bp2Enabled = true, bp2Port = 0 });
-        await engine.CallAsync("bp2.trust-peer", new { fingerprint = peerFingerprint });
-        await peer.CallAsync("bp2.trust-peer", new { fingerprint = ownFingerprint });
         peerStatus = await peer.CallAsync("status");
         var peerPort = peerStatus?["bp2Port"]?.GetValue<int>() ?? throw new Exception("Missing native port");
         try {
@@ -265,10 +255,7 @@ try
         if (history is not JsonArray resetHistory || resetHistory.Count != 9 ||
             resetHistory.Select(entry => entry?["id"]?.ToString()).Distinct().Count() != 9 ||
             Directory.GetFiles(peerReceived, "*", SearchOption.AllDirectories).Length != 9) throw new Exception("Per-file reset duplicated files/history");
-        await resetSender.CallAsync("bp2.untrust-peer", new { fingerprint = peerFingerprint });
-        var revoked = await resetSender.CallAsync("settings.get");
-        if (revoked?["bp2TrustedPeers"]?.AsArray().Count != 0) throw new Exception("Trust revocation failed");
     }
-    Console.WriteLine("PASS: concurrent IPC, UTF-8, share/bridge, two-process BP/2 TCP/TLS, receiver and sender restart/resume, explicit per-file reset, SHA-256, deduplicated files/history, revocation, shutdown.");
+    Console.WriteLine("PASS: concurrent IPC, UTF-8, share/bridge, unpaired two-process BP/2 TCP/TLS, receiver and sender restart/resume, explicit per-file reset, SHA-256, deduplicated files/history, shutdown.");
 }
 finally { Directory.Delete(root, recursive: true); }

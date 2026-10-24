@@ -52,7 +52,7 @@ class Bp2PipelineTest {
         val sourceOpens = AtomicInteger(); val liveSources = AtomicInteger(); val peakSources = AtomicInteger()
         val observed = CompletableDeferred<Unit>()
         val waitingPublication = CompletableDeferred<Unit>()
-        val server = Bp2TlsServer(receiver, scope, { it == sender.fingerprint.lowercase() }, { connection ->
+        val server = Bp2TlsServer(receiver, scope, { connection ->
             try {
                 val initial = Bp2Controls.decode(connection.receive()!!.payload)
                 connection.sendControl(Bp2.json.encodeToJsonElement(Bp2HelloAck(

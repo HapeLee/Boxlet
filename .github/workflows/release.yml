@@ -149,7 +149,9 @@ jobs:
         run: choco install innosetup -y --no-progress
 
       - name: 构建便携包
-        run: .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
+        run: |
+          .\windowsApp\tests\LauncherSmoke.ps1
+          .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
 
       - name: 构建安装包（复用上一步的便携目录）
         shell: pwsh
@@ -252,6 +254,7 @@ jobs:
             gh release upload "$tag" dist/* --clobber
           else
             gh release create "$tag" dist/* \
+              --target "$GITHUB_SHA" \
               --title "Boxlet ${VERSION}" \
               --generate-notes
           fi

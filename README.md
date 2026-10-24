@@ -2,13 +2,11 @@
 
 当前版本：**v1.0.0**。变更与验证边界见 [更新记录](CHANGELOG.md)。
 
-局域网文件互传客户端。原生应用默认启用 **Boxlet Protocol 2（BP/2）**，同时兼容 LocalSend v2.2：统一发现附近设备，已配对 Boxlet 优先使用 BP/2，其他设备自动使用 LocalSend。
+局域网文件互传客户端，默认使用 **LocalSend v2.2** 发现设备和传输文件。接收权限统一使用确认、收藏设备自动接收和快速保存规则，无需手动配对。
 
-> Android、Compose 桌面与 WinUI 的“设置 → Boxlet Protocol 2”提供开关、状态、本机指纹复制、对端指纹登记/撤销及直接 IP 连接。双方须通过可信渠道核对完整指纹并分别添加对方；未配对的发现公告不会自动获得信任。已有显式关闭设置保持关闭。普通文件系统支持双方重启续传；Android 接收端 SAF/MediaStore 恢复与 WSS 待完成，浏览器仍使用 SP/1。见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md)、[BP/2 规范](docs/BOXLET-PROTOCOL-2.md) 和 [ADR 0008](docs/adr/0008-boxlet-primary-protocol.md)。
+默认 HTTP(S)/UDP 端口为 53317，自定义端口会通过发现公告告知对端。三端暂不提供 BP/2 开关、端口或状态设置；BP/2 的协议实现和回归测试保留在内部，见 [实现记录](docs/protocol/IMPLEMENTATION.md)。旧配置会一次迁移到 LocalSend 默认值，保留自定义端口、收藏和接收偏好。
 
-> 默认 LocalSend 兼容、自动路由及未来 Google Quick Share 的扩展边界见 [ADR 0009](docs/adr/0009-unified-device-discovery-and-routing.md)；Quick Share 尚处研究规划，不是已支持能力。
-
-> 2026-10-25：**Boxlet Protocol 2（BP/2）** 已支持双向会话、分页清单、BATCH、流式校验、坏块修复、暂停、有界自动重连续传，以及源前缀变化后的显式逐文件重传。两个独立引擎进程通过 256 MiB 传输中分别重启接收端、发送端后的续传、最终 SHA-256 与文件/历史去重验证；双通道优先 BP/2，仅 LocalSend 设备自动兼容。见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md) 和 [实现记录](docs/protocol/IMPLEMENTATION.md)，原生数据链路统一使用 TCP/TLS，UDP 仅用于设备发现；尚无无线吞吐提速结论。
+LocalSend 实现与“快速发送（跳过预哈希）”说明见 [实现记录](docs/protocol/LOCALSEND-IMPLEMENTATION.md)。浏览器继续使用 SP/1；Quick Share 尚处研究规划，见 [ADR 0009](docs/adr/0009-unified-device-discovery-and-routing.md)。
 
 - **Android**：Jetpack Compose + Material 3，四页式移动端体验；沉浸式边到边 + 液态玻璃顶栏 / 悬浮底栏（`io.github.kyant0:backdrop`，Android 12 及以上）。
 - **Windows 原生桌面**：WinUI 3 + Microsoft.UI.Reactor，系统 Mica、圆角、标题栏与窗口动画；复用 JVM 引擎。构建说明见 [`windowsApp/README.md`](windowsApp/README.md)。
@@ -27,7 +25,7 @@ LocalSend 兼容链路的代码边界、取消/连接复用与验证方式见 [�
 - BP/2 始终使用双向 TLS 和流式完整性校验；LocalSend 兼容传输可配置 HTTP(S) 和 SHA-256
 - LocalSend 快速发送可跳过预哈希，接收同意后直接上传；默认仍启用发送校验
 - 发送文件、多文件、文件夹（保留相对目录结构）、文本消息；接收确认 / 拒收 / 取消
-- LocalSend 接收 PIN、每 IP 失败限流（3 次 / 60 秒）；BP/2 通过双向指纹配对授权并保留接收确认
+- LocalSend 接收 PIN、每 IP 失败限流（3 次 / 60 秒）；BP/2 统一使用接收确认、收藏设备自动接收和快速保存规则
 - SHA-256 生成与校验（校验失败自动重传，最多 3 次）
 - 浏览器分享：对方无需装客户端，用浏览器打开链接即可下载（独立明文端口 + 可选 PIN）；主端口同时按协议提供 `prepare-download` / `download`
 - SP/1 浏览器接入：一条 WebSocket 顺序发多文件、进程内断点续传、设备列表增量推送
@@ -38,7 +36,7 @@ LocalSend 兼容链路的代码边界、取消/连接复用与验证方式见 [�
 - Android 图库保存：图片 →「图片/Boxlet」、视频 →「视频/Boxlet」，其它仍进「下载/Boxlet」
 - Android 分享接收：系统「分享」文件到 Boxlet 后选设备发送
 - Android SAF 目录选择；桌面自定义保存目录
-- 默认 BP/2 TCP `53318`，LocalSend HTTP(S) TCP `53317`；两套发现同时工作，兼容官方 UDP `53317` 发现；自定义端口保持配置值，发现不可用时报告受限原因
+- 默认 LocalSend HTTP(S)/UDP `53317`；自定义端口保持配置值，发现不可用时报告受限原因
 
 ## 技术栈（2026-10 最新稳定版）
 
@@ -134,11 +132,11 @@ GitHub Release → Telegram 通知；需要的 Actions 密钥与产物清单同�
 
 ## 互通说明
 
-- 已配对的 BP/2 设备边传边校验，正常首次发送无需预读整个文件；标准 LocalSend 兼容通道在启用发送校验时预哈希，开启“LocalSend 快速发送”则省略整文件摘要。旧私有尾摘要扩展仅在关闭 BP/2 且显式协商时保留，见 [LocalSend 实现记录](docs/protocol/LOCALSEND-IMPLEMENTATION.md)。
-- 默认 BP/2 TCP/UDP 端口 `53318`，LocalSend TCP/UDP `53317`；LocalSend 使用多播组 `224.0.0.167`，BP/2 使用独立发现公告。自定义端口与冲突处理见 [使用说明](docs/protocol/BP2-EXPERIMENTAL.md)。
+- BP/2 设备边传边校验，正常首次发送无需预读整个文件；标准 LocalSend 兼容通道在启用发送校验时预哈希，开启“LocalSend 快速发送”则省略整文件摘要。旧私有尾摘要扩展仅供显式启用的底层测试/基准使用，产品不协商该扩展，见 [LocalSend 实现记录](docs/protocol/LOCALSEND-IMPLEMENTATION.md)。
+- 默认 LocalSend TCP/UDP 端口 `53317`，多播组 `224.0.0.167`；BP/2 不默认启动，内部实验使用独立的发现与 TLS 端口。
 - 浏览器分享走**独立的明文 HTTP 端口**（系统分配，URL 由应用直接给出）：主服务是 HTTPS + 自签名证书，浏览器无法访问，所以 Download API 必须另开明文端口（见 [ADR 0003](docs/adr/0003-download-api.md)）。
-- 身份使用 RSA-2048 自签名证书（CN=`LocalSend User`），配对指纹为证书 DER 的 SHA-256 十六进制。
-- BP/2 强制双向 TLS，并验证双方已登记的完整指纹。LocalSend 默认开启 HTTPS，其服务端使用可选客户端证书，客户端出示本机证书。
+- 身份使用 RSA-2048 自签名证书（CN=`LocalSend User`），设备 ID 为证书 DER 的 SHA-256 十六进制，无需手动核对。
+- BP/2 强制双向 TLS，检查证书与 HELLO 一致，无需手动核对指纹。LocalSend 默认开启 HTTPS，其服务端使用可选客户端证书，客户端出示本机证书。
 - LocalSend 关闭 HTTPS 后使用明文 HTTP，仅建议可信网络；该开关不影响 BP/2。
 - 分享会话期间公告的 `download` 为 `true`，此时主端口的 `prepare-download` / `download` 与分享端口读同一份数据；没有会话时按协议回 403。
 - 接收文件默认保存到应用目录；Android 可在设置中选择 SAF 目录，桌面默认 `~/Downloads/Boxlet`。

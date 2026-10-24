@@ -14,12 +14,13 @@ data class Settings(
     val alias: String = randomAlias(),
     val deviceType: DeviceType = DeviceType.DESKTOP,
     val deviceModel: String? = null,
-    val port: Int = Protocol.DEFAULT_PORT,
+    val port: Int = Protocol.LOCALSEND_PORT,
     val https: Boolean = true,
-    /** Native peers prefer authenticated BP/2; LocalSend remains enabled for compatibility. */
-    val bp2Enabled: Boolean = true,
+    /** Internal experiment only; the product uses standard LocalSend and exposes no BP/2 controls. */
+    val bp2Enabled: Boolean = false,
     val bp2Port: Int = 53318,
-    val bp2TrustedPeers: Set<String> = emptySet(),
+    /** One-time migration from the former BP/2 product default; not a user-facing control. */
+    val protocolDefaultsVersion: Int = 0,
     val multicastGroup: String = Protocol.DEFAULT_MULTICAST_GROUP,
     val discoveryTimeoutMs: Long = Protocol.DISCOVERY_TIMEOUT_MS,
     val networkWhitelist: List<String> = emptyList(),

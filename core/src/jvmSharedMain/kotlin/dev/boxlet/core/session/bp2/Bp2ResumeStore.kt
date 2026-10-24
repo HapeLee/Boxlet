@@ -163,12 +163,12 @@ class Bp2ResumeStore(private val root: File, private val targetRoot: File,
     }
     private fun transferDirectories() = recordsRoot.listFiles().orEmpty().filter { it.isDirectory && it.name.matches(Regex("[0-9a-f]{32}")) }
     /** Mark revocation first; a live lease prevents deleting its files until it has closed. */
-    @Synchronized fun cleanup(trusted: Set<String>? = null) {
+    @Synchronized fun cleanup() {
         transferDirectories().forEach { directory ->
             runCatching {
                 val record = runCatching { Bp2.json.decodeFromString<ResumeRecord>(read(safe(directory, "transfer.json"), 16384)) }.getOrNull()
                 val expired = record?.let { now() >= it.expiresAt } ?: (now() - directory.lastModified() >= Bp2CheckpointFile.LIFETIME_MS)
-                if (expired || (trusted != null && record != null && record.peer !in trusted)) safe(directory, "revoked").createNewFile()
+                if (expired) safe(directory, "revoked").createNewFile()
                 if (!safe(directory, "revoked").exists()) return@runCatching
                 val lease = lock(directory)
                 try {

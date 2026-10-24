@@ -180,7 +180,6 @@ class BoxletApp(
             verifyChecksums = settings.verifyChecksums,
             bp2Enabled = settings.bp2Enabled,
             bp2Port = settings.bp2Port,
-            bp2TrustedPeers = settings.bp2TrustedPeers,
             autoAccept = { device ->
                 favoritesRepository.entries.value.any {
                     it.fingerprint.equals(device.fingerprint, ignoreCase = true)
@@ -199,7 +198,6 @@ class BoxletApp(
         val after = settingsRepository.update(transform)
         val needsRestart = before.port != after.port || before.destination != after.destination ||
             before.bp2Enabled != after.bp2Enabled || before.bp2Port != after.bp2Port ||
-            before.bp2TrustedPeers != after.bp2TrustedPeers ||
             before.https != after.https ||
             before.multicastGroup != after.multicastGroup ||
             before.networkWhitelist != after.networkWhitelist ||
@@ -214,19 +212,6 @@ class BoxletApp(
     fun scan() = engine.scan()
 
     fun announce() = engine.announceNow()
-
-    fun trustBp2Peer(fingerprint: String, trusted: Boolean) {
-        val normalized = fingerprint.trim().lowercase()
-        dev.boxlet.core.protocol.bp2.Bp2.requireFingerprint(normalized)
-        require(!normalized.equals(security.fingerprint, true)) { "Cannot pair with this device itself" }
-        updateSettings { settings -> settings.copy(bp2TrustedPeers = if (trusted)
-            settings.bp2TrustedPeers + normalized else settings.bp2TrustedPeers.filterNot { it.equals(normalized, true) }.toSet()) }
-    }
-
-    fun connectBp2(address: String, fingerprint: String) {
-        val endpoint = parseBp2Endpoint(address)
-        engine.connectBp2(endpoint.host, endpoint.port, fingerprint.trim().lowercase())
-    }
 
     fun sendFiles(fingerprint: String, files: List<OutgoingFile>) {
         engine.send(fingerprint, files, pinProvider = ::awaitPin)

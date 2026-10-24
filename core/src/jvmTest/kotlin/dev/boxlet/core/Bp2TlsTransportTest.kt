@@ -26,7 +26,6 @@ class Bp2TlsTransportTest {
         val bytes = ByteArray(2 * Bp2.CHUNK_BYTES + 3) { (it * 31).toByte() }
         val published = CompletableDeferred<ByteArray>()
         val server = Bp2TlsServer(receiver, scope,
-            authorizePeer = { it == sender.fingerprint.lowercase() },
             onConnection = { connection ->
                 assertEquals(sender.fingerprint.lowercase(), connection.peerFingerprint)
                 val hello = Bp2Controls.decode(connection.receive()!!.payload)
@@ -82,26 +81,45 @@ class Bp2TlsTransportTest {
         } finally { server.close() }
     }
 
-    @Test fun wrongServerPinAndUnapprovedClientNeverReachApplicationHandler() = runBlocking {
-        val approved = CompletableDeferred<String>()
-        var handled = false
-        val server = Bp2TlsServer(receiver, scope, authorizePeer = { approved.complete(it); false },
-            onConnection = { handled = true })
+    @Test fun wrongServerPinNeverReachesApplicationHandler() = runBlocking {
+        val failed = CompletableDeferred<Unit>()
+        val handled = AtomicInteger()
+        val server = Bp2TlsServer(receiver, scope, onConnection = { handled.incrementAndGet() },
+            onFailure = { failed.complete(Unit) })
         val port = server.start(0)
         try {
             assertFails { Bp2TlsClient.connect("127.0.0.1", port, sender, "0".repeat(64), scope) }
-            Bp2TlsClient.connect("127.0.0.1", port, sender, receiver.fingerprint, scope).use { client ->
-                assertEquals(sender.fingerprint.lowercase(), withTimeout(10000) { approved.await() })
-                assertTrue(runCatching { client.receive() == null }.getOrDefault(true))
+            withTimeout(10000) { failed.await() }
+            assertEquals(0, handled.get())
+        } finally { server.close() }
+    }
+
+    @Test fun clientWithoutADeviceCertificateNeverReachesApplicationHandler() = runBlocking {
+        val failed = CompletableDeferred<Unit>()
+        val handled = AtomicInteger()
+        val server = Bp2TlsServer(receiver, scope, onConnection = { handled.incrementAndGet() },
+            onFailure = { failed.complete(Unit) })
+        val port = server.start(0)
+        try {
+            val context = javax.net.ssl.SSLContext.getInstance("TLS").apply {
+                init(null, arrayOf(Certificates.clientTrustManager(receiver.fingerprint)), java.security.SecureRandom())
             }
-            assertFalse(handled)
+            withContext(Dispatchers.IO) {
+                context.socketFactory.createSocket("127.0.0.1", port).use { raw ->
+                    val socket = raw as javax.net.ssl.SSLSocket
+                    socket.soTimeout = 3000
+                    runCatching { socket.startHandshake(); socket.inputStream.read() }
+                }
+            }
+            withTimeout(10000) { failed.await() }
+            assertEquals(0, handled.get())
         } finally { server.close() }
     }
 
     @Test fun closingServerReleasesBlockedReadersAndListeningPort() = runBlocking {
         val accepted = CompletableDeferred<Unit>()
         val stopped = CompletableDeferred<Unit>()
-        val server = Bp2TlsServer(receiver, scope, authorizePeer = { true }, onConnection = {
+        val server = Bp2TlsServer(receiver, scope, onConnection = {
             accepted.complete(Unit)
             try { it.receive() } finally { stopped.complete(Unit) }
         })
@@ -120,7 +138,7 @@ class Bp2TlsTransportTest {
 
     @Test fun groupedControlsKeepIndividualSequencesAndRejectOversizedGroupsBeforeWriting() = runBlocking {
         val accepted = CompletableDeferred<Bp2TlsConnection>()
-        val server = Bp2TlsServer(receiver, scope, { true }, {
+        val server = Bp2TlsServer(receiver, scope, {
             accepted.complete(it); awaitCancellation()
         }, { accepted.completeExceptionally(it) })
         val port = server.start(0)

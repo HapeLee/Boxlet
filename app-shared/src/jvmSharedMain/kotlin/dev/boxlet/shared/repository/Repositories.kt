@@ -18,6 +18,13 @@ class SettingsRepository(
     defaults: Settings,
 ) {
     private val store = JsonStore(file, Settings.serializer(), scope, defaults)
+    init {
+        if (store.state.value.protocolDefaultsVersion < 1) store.update { settings ->
+            settings.copy(bp2Enabled = false, protocolDefaultsVersion = 1,
+                port = if (settings.port == dev.boxlet.core.protocol.Protocol.DEFAULT_PORT)
+                    dev.boxlet.core.protocol.Protocol.LOCALSEND_PORT else settings.port)
+        }
+    }
     val state: StateFlow<Settings> = store.state
 
     fun update(transform: (Settings) -> Settings): Settings = store.update(transform)

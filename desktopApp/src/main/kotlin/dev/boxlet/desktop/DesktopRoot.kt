@@ -41,8 +41,6 @@ import dev.boxlet.core.protocol.Protocol
 import dev.boxlet.shared.BoxletApp
 import dev.boxlet.shared.ThemeMode
 import dev.boxlet.shared.UiState
-import dev.boxlet.shared.bp2PairingError
-import dev.boxlet.shared.bp2Status
 import kotlinx.coroutines.delay
 import io.github.composefluent.ExperimentalFluentApi
 import io.github.composefluent.FluentTheme
@@ -522,7 +520,6 @@ private fun HistoryPage(app: BoxletApp, state: UiState) {
 @Composable
 private fun SettingsPage(app: BoxletApp, state: UiState) {
     val settings = state.settings
-    var pairingError by remember { mutableStateOf<String?>(null) }
     PageLayout(title = "设置", subtitle = "修改会立即生效并写入本地配置") {
         item {
             SectionCard("设备") {
@@ -534,43 +531,12 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
                         app.updateSettings { it.copy(port = port) }
                     }
                 }
-                if (settings.bp2Enabled && settings.port == Protocol.DEFAULT_PORT) {
-                    Text("启用 BP/2 时，旧默认值 53318 自动使用 53317，避免端口冲突。")
-                }
                 CommitRow("设备型号", settings.deviceModel.orEmpty()) { value ->
                     app.updateSettings { it.copy(deviceModel = value.trim().ifBlank { null }) }
                 }
             }
         }
 
-        item {
-            SectionCard("Boxlet Protocol 2") {
-                SwitchRow("优先使用 BP/2", "已配对 Boxlet 使用 BP/2；其他设备自动使用 LocalSend", settings.bp2Enabled) { value ->
-                    app.updateSettings { it.copy(bp2Enabled = value) }
-                }
-                InfoLine("状态", state.bp2Status)
-                CommitRow("BP/2 端口", settings.bp2Port.toString()) { value ->
-                    value.trim().toIntOrNull()?.takeIf { it in 1024..65535 }?.let { port ->
-                        app.updateSettings { it.copy(bp2Port = port) }
-                    }
-                }
-                Text("双方先核对完整指纹，再分别添加对方。修改配对或协议设置会重启接收服务。")
-                InfoLine("本机指纹", state.fingerprint)
-                Button(onClick = { copyToClipboard(state.fingerprint) }) { Text("复制本机指纹") }
-                CommitRow("已核对的对端指纹", "") { value ->
-                    pairingError = bp2PairingError(value, state.fingerprint)
-                    if (pairingError == null) app.trustBp2Peer(value, true)
-                }
-                pairingError?.let { Text(it) }
-                settings.bp2TrustedPeers.sorted().forEach { fingerprint ->
-                    InfoLine("已配对设备", fingerprint)
-                    Button(onClick = { app.trustBp2Peer(fingerprint, false) }) { Text("撤销配对") }
-                    CommitRow("直接连接的 IP 或 主机:端口（默认 53318）", "") { host ->
-                        pairingError = runCatching { app.connectBp2(host, fingerprint) }.exceptionOrNull()?.message
-                    }
-                }
-            }
-        }
 
         item {
             SectionCard("传输") {
@@ -580,10 +546,10 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
                 SwitchRow("仅收藏设备自动接收", "只对已收藏设备启用快速保存", settings.quickSaveFromFavorites) { value ->
                     app.updateSettings { it.copy(quickSaveFromFavorites = value) }
                 }
-                SwitchRow("LocalSend 快速发送（跳过预哈希）", "接收同意后直接上传，不提供整文件 SHA-256 比对；关闭则启用发送校验。BP/2 照常校验。", !settings.createChecksums) { value ->
+                SwitchRow("LocalSend 快速发送（跳过预哈希）", "接收同意后直接上传，不提供整文件 SHA-256 比对；关闭则启用发送校验。", !settings.createChecksums) { value ->
                     app.updateSettings { it.copy(createChecksums = !value) }
                 }
-                SwitchRow("LocalSend 接收校验", "校验兼容传输的 SHA-256；BP/2 完整性校验始终启用", settings.verifyChecksums) { value ->
+                SwitchRow("LocalSend 接收校验", "发送方提供 SHA-256 时，校验接收文件的完整性", settings.verifyChecksums) { value ->
                     app.updateSettings { it.copy(verifyChecksums = value) }
                 }
                 SwitchRow("记录接收历史", "保存文件与消息记录", settings.saveToHistory) { value ->
@@ -616,7 +582,7 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
 
         item {
             SectionCard("网络") {
-                SwitchRow("LocalSend HTTPS 加密", "控制兼容传输；BP/2 始终使用 TLS 加密", settings.https) { value ->
+                SwitchRow("LocalSend HTTPS 加密", "使用 HTTPS 加密局域网传输", settings.https) { value ->
                     app.updateSettings { it.copy(https = value) }
                 }
                 CommitRow("多播组", settings.multicastGroup) { value ->
@@ -677,7 +643,7 @@ private fun SettingsPage(app: BoxletApp, state: UiState) {
         item {
             SectionCard("关于") {
                 InfoLine("版本", BoxletBuild.VERSION)
-                InfoLine("协议", "Boxlet Protocol 2 · 兼容 LocalSend v${Protocol.VERSION}")
+                InfoLine("协议", "LocalSend v${Protocol.VERSION}")
                 InfoLine("设备指纹", "")
                 Text(
                     state.fingerprint,

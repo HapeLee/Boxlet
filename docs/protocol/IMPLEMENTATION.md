@@ -2,7 +2,7 @@
 
 更新：2026-10-25。本文记录代码事实，目标线格式仍以 [BP/2](../BOXLET-PROTOCOL-2.md) 为准。
 
-原生应用与 engine-host 默认启用 BP/2，已配对且认证成功的设备优先使用 BP/2；LocalSend 默认启用，未配对设备自动使用兼容通道。已有显式关闭设置保持关闭，浏览器仍使用 SP/1。Android、Compose 桌面、WinUI 均提供指纹登记/撤销和直接连接入口，见 [使用说明](BP2-EXPERIMENTAL.md)。这次切换仅覆盖原生默认配置，不表示全部规范或真机验收完成。
+原生应用与 engine-host 默认使用标准 LocalSend，BP/2 默认关闭；旧默认配置会一次迁移，保留自定义端口与接收偏好。BP/2 的实现和测试保留为内部实验，显式启用后经 TLS/HELLO 验证选择其通道。浏览器仍使用 SP/1。三端不提供 BP/2 开关、端口、状态或指纹配对入口，见 [使用说明](BP2-EXPERIMENTAL.md)。这次切换仅覆盖原生默认配置，不表示全部规范或真机验收完成。
 
 协议已统一更名为 **Boxlet Protocol 2（BP/2）**；代码、文档、发现标识、magic、摘要域、设置与 IPC 一起更新，不保留未发布 SP/2 线格式。仓库所在磁盘目录无需因此改名，旧 LocalSend 扩展的 `sendeeCapabilities/sendeeChecksum` 仍保留原历史字段名。
 
@@ -14,16 +14,16 @@
 | 32 字节帧、DATA、BATCH、TCP 增量/WSS 消息边界 | `Frames.kt` | Python 黄金向量；拆包、粘包、逐字节输入、恶意长度、序号、EOF、部分摘要损坏 |
 | 严格控制 JSON | `Control.kt` | UTF-8、嵌套重复 key、深度、无效数字与 trailing token |
 | manifestHash、contentRoot、prefixRoot | `Digests.kt` | Okio SHA-256；JVM/Wasm 与独立 Python 空文件/块边界/Unicode 向量一致 |
-| 原生 TLS 帧通道 | `core/.../transport/bp2/Bp2TlsTransport.kt` | mTLS、服务端 pin、客户端授权门、加密套件限制、有界 writer、错误身份拒绝、关闭阻塞连接 |
+| 原生 TLS 帧通道 | `core/.../transport/bp2/Bp2TlsTransport.kt` | mTLS、服务端 pin、客户端证书要求、加密套件限制、有界 writer、错误身份拒绝、关闭阻塞连接 |
 | 双向会话、确认与完成 | `core/.../session/bp2/Bp2Session.kt` | HELLO/ACK、分页 OFFER/ACCEPT、选择接收、拒绝/取消、等待确认期间反向发送、同一会话复用、接收提交后才确认完成 |
 | 流式校验与局部修复 | `Bp2FileTransfer.kt`、`Bp2Session.kt` | 源只打开一次、先校验再写入、contentRoot 通过才 commit；坏块 NACK、后续正确块暂存、从发送窗口修复而不重读源 |
 | 小文件与大文件调度 | `Bp2Session.kt` | BATCH 最多 8 项、两个大文件交错、协商流数上限；301 项分页清单、混合空文件/小文件/大文件 |
 | 累计信用与背压 | `Credit.kt`、`Bp2Session.kt` | 重复 WINDOW_UPDATE 不增信用、重传单独计费、保留 1 MiB 修复空间；传输跨越默认 8 MiB 窗口 |
-| 原生发现与显式信任 | `Bp2DiscoveryService.kt`、`Bp2EngineAdapter.kt` | IPv4 独立 UDP 公告；只探测已登记指纹，TLS/HELLO 验证后加入设备列表；IPC 登记/撤销/手动连接 |
-| 实际任务路由 | `DeviceDirectory.kt`、`TransferEngine.kt` | 双通道优先 BP/2、LocalSend-only 自动兼容、BP/2 缺信任不偷偷降级；任务固定 adapter 与端点 |
+| 原生发现与证书一致性 | `Bp2DiscoveryService.kt`、`Bp2EngineAdapter.kt` | IPv4 独立 UDP 公告；探测合法公告，TLS/HELLO 验证后加入设备列表；限制同时进行的探测握手，IPC 可按已知端点直连 |
+| 实际任务路由 | `DeviceDirectory.kt`、`TransferEngine.kt` | 双通道优先 BP/2、LocalSend-only 自动兼容、BP/2 证书验证失败不偷偷降级；任务固定 adapter 与端点 |
 | 现有接收界面、存储与历史 | `Bp2EngineAdapter.kt`、`BoxletApp.kt` | 共用接收确认/选择/取消；逐文件 O(1) 状态更新、100ms 快照；文本记录已校验正文；完成记录真实 adapterId |
 | 默认 LocalSend 兼容发现 | `DiscoveryService.kt`、`TransferEngine.kt` | 官方 UDP 53317 与公告 TCP 端口分离；启用 BP/2 后默认 LocalSend TCP 53317、BP/2 TCP 53318 |
-| 标准 LocalSend 报文 | `TransferEngine.kt` | 启用 BP/2 后兼容链路不公告/协商 ADR 0007 私有摘要尾部，即使旧对端宣告支持也走标准格式 |
+| 标准 LocalSend 报文 | `TransferEngine.kt` | 产品默认不公告/协商 ADR 0007 私有摘要尾部，即使旧对端宣告支持也走标准格式；仅底层显式实验标记可启用旧扩展 |
 | 独立就绪状态 | `EngineState.protocols` → `UiState.protocols` → IPC | discovery/send/receive 分别报告；端口绑定失败不标记适配器 ready |
 | 任务暂停与继续 | `Bp2Session.kt`、`Bp2EngineAdapter.kt`、各端传输卡片、IPC | 双方均可暂停/继续、重复暂停幂等、暂停时反向传输可用、暂停时取消唤醒发送调度；继续使用原连接/原 source |
 | 磁盘检查点与源前缀验证组件 | `Bp2CheckpointFile.kt` | 数据/块摘要先 sync 再发布元数据；仅保存 token 摘要并绑定身份/任务/清单/文件与有效期；磁盘 hash journal、独占写锁、恢复验证/截断尾部、源前缀比较；子进程 halt 后恢复 |
@@ -35,23 +35,23 @@
 
 标准库测试向量生成器同时生成 `bp2-vectors.json` 和 commonTest 的 Kotlin fixture。公共测试运行在 JVM 与真正的 Wasm/Node 环境。
 
-Windows IPC 冒烟测试会启动两个独立引擎进程，在临时数据目录登记双方证书、连接、发送中文文件名/小文件/空文件；另进行两轮 256 MiB 传输，分别中途停止接收进程与发送进程，使用原身份、数据目录和接收端点重启后恢复任务，核对最终 SHA-256、没有重复文件及历史；发送端重启先停在 PAUSED，显式继续后完成。再进行一轮 256 MiB 发送端重启后修改源前缀的测试，确认任务先暂停，显式逐文件重置后 SHA-256 与当前源一致，文件/历史仍无重复。最后撤销信任并关闭进程。测试同时覆盖原有分享、SP/1 bridge 与并发 UTF-8 IPC。它证明本机跨进程与双方分别重启恢复可用，不代表 Android ↔ Windows 无线吞吐、整机断电或官方 LocalSend 客户端真机验收。
+Windows IPC 冒烟测试会启动两个独立引擎进程，在临时数据目录、不登记配对的情况下连接、发送中文文件名/小文件/空文件；另进行两轮 256 MiB 传输，分别中途停止接收进程与发送进程，使用原身份、数据目录和接收端点重启后恢复任务，核对最终 SHA-256、没有重复文件及历史；发送端重启先停在 PAUSED，显式继续后完成。再进行一轮 256 MiB 发送端重启后修改源前缀的测试，确认任务先暂停，显式逐文件重置后 SHA-256 与当前源一致，文件/历史仍无重复。最后关闭进程；整个过程不登记配对。测试同时覆盖原有分享、SP/1 bridge 与并发 UTF-8 IPC。它证明本机跨进程与双方分别重启恢复可用，不代表 Android ↔ Windows 无线吞吐、整机断电或官方 LocalSend 客户端真机验收。
 
 ## 剩余工作与当前边界
 
 - 原生普通文件系统的双方重启续传已接入实际任务。发送端需显式可重开 source 引用；临时授权/无引用 source 保持原进程内恢复能力。Android 持久读取授权文档/目录的 source resolver 已接入并编译通过，授权撤销、provider 离线与真机进程恢复仍待设备验收。
 - 仅在私有检查点目录与目标目录不重叠、且文件系统支持同卷硬链接原子发布时启用接收续传并公告 `resume`；跨卷或不支持的文件系统继续使用现有接收路径。Android SAF/MediaStore 不公告接收持久化续传，不默认增加中转拷贝。文本或包含文本的任务目前不签发续传凭证。
 - WSS 载体、浏览器可信证书、发送/条件接收与文件权限恢复。现有 WSS 消息 codec 不等于浏览器 BP/2 已上线。
-- 图形配对已支持完整指纹登记/撤销、复制本机指纹及 IP/端口直连；扫码/短码配对向导尚未实现。未信任的原生公告不会自动加入列表或自动信任。
+- 已移除单独的图形配对、指纹名单与相关 IPC，接收权限使用现有确认/收藏/快速保存规则；不再规划另一套扫码/短码配对。发现仍须经 TLS/HELLO 验证，证书身份继续用于收藏匹配与续传绑定。
 - IPv6 原生发现、真实 Android/Windows 局域网与后台场景验证。
 - 大清单的磁盘索引、慢磁盘/低内存压力验证。清单分页传送，但最多 100000 项的元数据仍保存在内存，尚非常数内存清单。
 - 空目录传输、逐文件取消/暂停等最终规范要求。当前会话只接受文件和文本；任务级暂停已可用。源前缀不一致保留暂停并等待用户选择恢复原内容或仅重传该文件，已实现前缀变化后的显式 `reset-file`；文件大小变化、清单修改及传输中逐文件重置尚不支持。
 - 完成结果可在重连中查询，已完成文件不会重发；跨进程历史通过稳定 completionId 去重。目前没有独立的历史 outbox 管理界面；磁盘/provider 及断电持久性仍需进一步验证。
 - 完整 UI 统一目录模型与适配器独立开关。实际发送由 TransferRouter 选择，但现有 Device 模型仍承担应用快照，尚未全部替换为 PeerRecord。
-- 原生默认已启用 BP/2；浏览器迁移与删除旧 Boxlet 扩展尚未完成。BP/2 关闭时仍保留原开发链路，开启后 LocalSend 兼容路径使用标准格式。
+- 原生默认已切回标准 LocalSend，三端暂不提供 BP/2 设置。BP/2 与旧摘要扩展保留为内部测试代码，旧扩展必须单独显式开启，关闭 BP/2 不会自动启用。浏览器迁移尚未完成。
 - Quick Share 仍仅研究规划，不在当前可用协议列表。
 
-启用 BP/2 时，默认旧接收端口 53318 会让给 BP/2，LocalSend HTTP(S) 监听改为 53317；自定义端口保持配置值，冲突由 `protocols[]` 报告。LocalSend 端口配置为 0 的隔离测试模式不公告 BP/2。撤销信任或修改 BP/2 设置会重启引擎并中断当前连接；仍受信任且已持久化的发送任务在重新启用 BP/2 后恢复为暂停。
+启用 BP/2 时，默认旧接收端口 53318 会让给 BP/2，LocalSend HTTP(S) 监听改为 53317；自定义端口保持配置值，冲突由 `protocols[]` 报告。LocalSend 端口配置为 0 的隔离测试模式不公告 BP/2。修改 BP/2 设置会重启引擎并中断当前连接；已持久化的发送任务在重新启用 BP/2 后恢复为暂停。
 
 ## 可重复验证
 
@@ -71,7 +71,7 @@ python scripts/protocol_bp2_vectors.py --check
 
 保留通用的已授权恢复接管：先核对原身份、任务、清单、凭证和有效期，才能关闭对应旧活动会话，等旧写入者退出后重新获取排他租约。错误凭证不能驱逐旧会话。发送记录中的未知旧载体标记会被拒绝并隔离，不隐式解释成 TCP 任务。
 
-原生默认迁移补充：`Settings.bp2Enabled` 默认改为 true，缺失该字段的旧配置跟随新默认，显式 false 保持关闭；底层 `EngineConfig` 的嵌入式默认不变，由应用装配传入开关。三端配置界面区分 BP/2 和 LocalSend 的加密/校验设置，避免兼容选项暗示 BP/2 可以关闭校验。WinUI 启动冲突检查覆盖实际两套监听端口。
+当前默认迁移：`Settings.bp2Enabled` 默认 false，应用默认 LocalSend 端口 53317。SettingsRepository 将缺少内部迁移标记的旧配置一次切回 LocalSend，旧默认端口 53318 改为 53317，其他自定义端口、接收/收藏与校验偏好保留。迁移完成后显式开启的开发实验不在每次启动时重置。三端已移除 BP/2 设置区，WinUI 启动冲突检查按迁移后的有效端口执行。
 
 小文件调度补充：同组最多 8 项的完成请求合并为一条 `files-finish`，无需逐文件等待一轮往返；回复可以乱序，必须逐文件收到成功才报告完成。空文件也参加分组完成，但不生成空 DATA/BATCH。组内发布 I/O 失败会逐项返回 `COMMIT_FAILED`，其余成功文件正常报告，发送任务终止；后续任务仍可复用连接。测试覆盖 17 项以 8/8/1 完成、部分选择、乱序回复、实际接收端首项落盘失败及全空文件；每文件落盘、摘要和发布语义不变。这是控制消息次数优化，不构成相对 LocalSend 或无线吞吐提升的测量结论。
 

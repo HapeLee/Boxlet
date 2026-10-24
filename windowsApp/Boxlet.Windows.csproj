@@ -28,6 +28,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="launcher\**\*.cs" />
     <EmbeddedResource Include="..\design\brand\parcel.json" LogicalName="Boxlet.Parcel.json" />
     <Content Include="..\design\brand\boxlet-mark.png" Link="Assets\BoxletMark.png" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />

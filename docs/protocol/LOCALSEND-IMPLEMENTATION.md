@@ -2,14 +2,14 @@
 
 更新：2026-10-25。
 
-本项目的 LocalSend 适配器沿用 [官方 v2.2 协议](https://github.com/localsend/protocol/blob/main/README.md)：JSON 元数据准备、逐文件二进制上传、并行传输、接收确认、PIN、SHA-256 与取消。它与 BP/2 分别维护身份授权和任务状态，发送由统一路由选择。原生 BP/2 默认设置本轮未调整。
+本项目的 LocalSend 适配器沿用 [官方 v2.2 协议](https://github.com/localsend/protocol/blob/main/README.md)：JSON 元数据准备、逐文件二进制上传、并行传输、接收确认、PIN、SHA-256 与取消。当前产品默认使用此标准链路，BP/2 默认关闭且不提供图形设置入口。产品不公告或协商私有摘要尾扩展；旧扩展仅供底层显式启用的测试/基准使用。
 
 ## 代码边界
 
 | 文件 | 职责 |
 |---|---|
 | `core/.../net/ApiClient.kt` | 按 HTTPS/证书指纹缓存客户端，封装元数据请求、可取消的准备/上传调用、取消与连接资源回收 |
-| `core/.../net/LocalSendUploadBody.kt` | 按声明大小流式读取源、进度、源大小变化检查；旧开发扩展的尾摘要仍须显式协商 |
+| `core/.../net/LocalSendUploadBody.kt` | 按声明大小流式读取源、进度、源大小变化检查；旧开发扩展仅供底层显式开启实验标记后协商，产品不启用 |
 | `core/.../net/HttpServer.kt` | 连接接入/关闭、请求头、路由调用、响应和连接复用 |
 | `core/.../net/HttpRequestBody.kt` | 固定长度与 chunked 请求体边界、分块扩展/尾部字段、有界行和元数据读取 |
 | `core/.../net/ApiServer.kt` | 官方 API 路径与 DTO、协议状态码映射 |

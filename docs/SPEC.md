@@ -1,8 +1,8 @@
 # Boxlet 项目规范
 
-> 局域网文件互传客户端，目标主协议为 Boxlet Protocol 2（BP/2），默认启用标准 LocalSend v2.2 兼容，统一发现并按目标自动路由。
+> 局域网文件互传客户端，当前默认使用标准 LocalSend v2.2；Boxlet Protocol 2（BP/2）保留为内部实验，不提供产品设置入口。
 > Android 使用 Jetpack Compose + Material 3；桌面使用 Compose Multiplatform + Fluent Design（compose-fluent-ui）。
-> 本文件是产品与工程规范入口；BP/2 线格式与状态机以 [BP/2 规范](BOXLET-PROTOCOL-2.md) 为准。原生应用默认启用 BP/2，双方核对完整指纹并登记信任后优先使用；未配对设备通过标准 LocalSend v2.2 兼容，已有显式关闭设置保持关闭。浏览器仍为 SP/1，阶段与边界见 [实现记录](protocol/IMPLEMENTATION.md) 和 [ADR 0008](adr/0008-boxlet-primary-protocol.md)。
+> 本文件是产品与工程规范入口；BP/2 线格式与状态机以 [BP/2 规范](BOXLET-PROTOCOL-2.md) 为准。原生应用默认使用标准 LocalSend，BP/2 默认关闭且三端隐藏其开关、端口和状态设置；已有默认配置会一次迁移，自定义端口和接收偏好保留。浏览器仍为 SP/1，阶段与边界见 [实现记录](protocol/IMPLEMENTATION.md) 和 [ADR 0008](adr/0008-boxlet-primary-protocol.md)。
 
 ---
 
@@ -10,11 +10,11 @@
 
 ### 1.1 目标
 
-1. **自有主协议与默认兼容**：Boxlet 设备优先使用 BP/2，标准 LocalSend v2.2 适配器默认同时发现与接收；选中仅支持 LocalSend 的设备就直接用其协议发送，不要求手动切模式，也不承担旧版 Boxlet 回退。协议身份、帧与续传状态分别隔离，统一 UI/任务模型。当前端口与运行时行为仍见第 4 节；目标路由与 Quick Share 研究边界见 [ADR 0009](adr/0009-unified-device-discovery-and-routing.md)。
+1. **当前默认 LocalSend**：应用使用标准 LocalSend v2.2 发现、发送和接收；BP/2 实现保留为内部实验，暂不提供协议切换或相关设置。协议身份、帧与续传状态分别隔离，统一 UI/任务模型。当前端口与运行时行为仍见第 4 节；目标路由与 Quick Share 研究边界见 [ADR 0009](adr/0009-unified-device-discovery-and-routing.md)。
 2. **双端原生体验**：Android 遵循 Material 3 与系统交互习惯；桌面遵循 Windows 11 Fluent Design 与桌面交互习惯（侧边导航、Mica、键盘/鼠标友好）。
 3. **核心与 UI 解耦**：网络与协议层不依赖任何 Compose / Android UI API，可被将来的原生桌面壳（WinUI 3 / Avalonia / Tauri / Qt）直接复用或通过进程协议驱动。
 4. **最新且可复现的工具链**：版本统一收敛在 `gradle/libs.versions.toml`，禁用动态版本。
-5. **安全默认**：BP/2 使用 TLS/WSS 与持久化设备身份，首次明确配对，已信任设备固定证书指纹，不自行设计加密算法；浏览器证书信任与授权单独处理。现有链路在迁移前保留 HTTPS 默认。
+5. **安全默认**：BP/2 使用 TLS 与持久化设备证书，校验连接身份一致性；接收权限由确认、收藏设备自动接收和快速保存规则决定，无单独的配对名单，不自行设计加密算法。浏览器 WSS 的证书信任与授权单独处理，尚未上线；LocalSend 默认使用 HTTPS。
 
 ### 1.2 非目标（当前里程碑）
 
@@ -125,14 +125,14 @@ core/src/jvmMain          # 预留 actual
 
 ## 4. LocalSend v2.2 实现与未来兼容层规范
 
-BP/2 关闭时，旧开发链路仍可协商 `sha256-trailer-v1` 流式校验扩展，见 [ADR 0007](adr/0007-streaming-checksum-and-upload-scheduling.md)。默认启用 BP/2 后，LocalSend 兼容链路不公告或协商这些私有扩展，按标准报文发送与接收。本节只约束 LocalSend，不约束 BP/2 的帧、版本或端口。
+产品始终按标准 LocalSend 报文发送与接收，不公告或协商 `sha256-trailer-v1`。该旧扩展仅供底层显式开启 `EngineConfig.legacyStreamingChecksumEnabled` 的测试/基准使用，见 [ADR 0007](adr/0007-streaming-checksum-and-upload-scheduling.md)。本节只约束 LocalSend，不约束 BP/2 的帧、版本或端口。
 
 ### 4.1 常量
 
 | 名称 | 值 |
 |---|---|
 | 协议版本 | `2.2` |
-| 默认端口（TCP + UDP） | 默认启用 BP/2，LocalSend TCP `53317`，BP/2 TCP `53318`；BP/2 关闭时使用旧开发端口 `53318`；自定义端口保持配置值 |
+| 默认端口（TCP + UDP） | 应用默认 LocalSend TCP/UDP `53317`；旧默认 `53318` 一次迁移为 `53317`，其他自定义端口保持；BP/2 默认关闭 |
 | 官方 LocalSend 端口 | `53317`（`Protocol.LOCALSEND_PORT`）；默认增加该 UDP 发现端口，公告 HTTP 的实际接收端口，无需为正常多播发现手改 TCP 端口 |
 | IPv4 多播组 | `224.0.0.167` |
 | IPv6 多播组（预留） | `ff12::fd3a:e420` |

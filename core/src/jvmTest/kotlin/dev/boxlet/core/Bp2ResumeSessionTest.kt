@@ -53,7 +53,7 @@ class Bp2ResumeSessionTest {
         features = listOf("send", "receive", "batch", "resume", "reset-file"))
     private suspend fun connect(): Bp2Session {
         if (server == null) {
-            server = Bp2TlsServer(receiver, scope, { it == sender.fingerprint.lowercase() }, { connection ->
+            server = Bp2TlsServer(receiver, scope, { connection ->
                 val session = Bp2Session.open(connection, hello(receiver.fingerprint), false, handler, scope)
                 remote.set(session); session.awaitClosed()
             }, { errors += it.stackTraceToString() })

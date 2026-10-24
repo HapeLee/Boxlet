@@ -569,7 +569,8 @@ class TransferEngine(
 
     override fun localInfo(): RegisterRequest = configProvider().toRegisterRequest()
         .copy(port = actualPort, download = shareServer != null,
-            sendeeCapabilities = if (configProvider().bp2Enabled) null else listOf(Protocol.STREAMING_CHECKSUM))
+            sendeeCapabilities = if (configProvider().legacyStreamingChecksumEnabled && !configProvider().bp2Enabled)
+                listOf(Protocol.STREAMING_CHECKSUM) else null)
 
     override fun showToken(): String = configProvider().showToken
 
@@ -639,7 +640,7 @@ class TransferEngine(
         }
 
         if (request.files.isEmpty()) return@withLock PrepareUploadOutcome.Rejected("No files provided")
-        if (config.bp2Enabled && request.files.values.any { it.sendeeChecksum != null })
+        if ((config.bp2Enabled || !config.legacyStreamingChecksumEnabled) && request.files.values.any { it.sendeeChecksum != null })
             return@withLock PrepareUploadOutcome.Invalid("Boxlet extensions are not available on the LocalSend compatibility endpoint")
         if (request.files.values.any {
                 it.sendeeChecksum != null && (it.sendeeChecksum != Protocol.STREAMING_CHECKSUM ||
@@ -1083,7 +1084,7 @@ class TransferEngine(
         try {
             // Probe the selected endpoint using the same pinned TLS client as the upload.
             // Missing/unknown capabilities always use the unchanged LocalSend wire format.
-            val streamingChecksum = !config.bp2Enabled && config.createChecksums && runCatching {
+            val streamingChecksum = config.legacyStreamingChecksumEnabled && !config.bp2Enabled && config.createChecksums && runCatching {
                 val result = api.info(channel, device.fingerprint)
                 result.isSuccessful && Protocol.STREAMING_CHECKSUM in
                     (BoxletJson.decodeFromString(InfoResponse.serializer(), result.body).sendeeCapabilities ?: emptyList())

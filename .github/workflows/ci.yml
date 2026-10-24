@@ -102,7 +102,10 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: gradle/actions/setup-gradle@v4
       - name: 构建便携包
-        run: .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
+        # Keep launcher behavior covered independently of WinUI's generated files.
+        run: |
+          .\windowsApp\tests\LauncherSmoke.ps1
+          .\windowsApp\publish.ps1 -JavaHome $env:JAVA_HOME
       - name: 上传便携 ZIP
         uses: actions/upload-artifact@v4
         with:

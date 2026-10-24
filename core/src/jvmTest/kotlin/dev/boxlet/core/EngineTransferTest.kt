@@ -77,9 +77,10 @@ class EngineTransferTest {
         val receiver = TransferEngine(scope, receiverSecurity, storage)
         val sender = TransferEngine(scope, senderSecurity, storage)
         try {
-            receiver.installConfig { baseConfig(receiverSecurity.fingerprint, "Receiver", true).copy(bp2Enabled = true, bp2Port = 0) }
-            sender.installConfig { baseConfig(senderSecurity.fingerprint, "Sender", true).copy(bp2Enabled = true, bp2Port = 0, createChecksums = false) }
+            receiver.installConfig { baseConfig(receiverSecurity.fingerprint, "Receiver", true).copy(legacyStreamingChecksumEnabled = false) }
+            sender.installConfig { baseConfig(senderSecurity.fingerprint, "Sender", true).copy(legacyStreamingChecksumEnabled = false, createChecksums = false) }
             receiver.start(); sender.start()
+            assertNull(receiver.localInfo().sendeeCapabilities)
             sender.addKnownDevice(Device(receiverSecurity.fingerprint, "Receiver", channels =
                 listOf(DeviceChannel("127.0.0.1", receiver.localInfo().port, true))))
             sender.send(receiverSecurity.fingerprint, contents.map { (name, bytes) -> OutgoingFile(
@@ -264,6 +265,7 @@ class EngineTransferTest {
         fingerprint = fingerprint,
         createChecksums = true,
         verifyChecksums = true,
+        legacyStreamingChecksumEnabled = true,
         quickSave = false,
         showToken = "test",
     )

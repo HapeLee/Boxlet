@@ -60,7 +60,7 @@ class Bp2SessionTest {
 
     private suspend fun pair(maxStreams: Int = 8): Pair<Bp2Session, Bp2Session> {
         val accepted = CompletableDeferred<Bp2Session>()
-        server = Bp2TlsServer(serverIdentity, scope, { it == clientIdentity.fingerprint.lowercase() }, {
+        server = Bp2TlsServer(serverIdentity, scope, {
             val session = Bp2Session.open(it, hello(serverIdentity.fingerprint, "Server", maxStreams), false, serverStore, scope)
             accepted.complete(session)
             session.awaitClosed()

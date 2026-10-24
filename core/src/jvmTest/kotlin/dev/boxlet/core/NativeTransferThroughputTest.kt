@@ -90,6 +90,7 @@ class NativeTransferThroughputTest {
         fingerprint = fingerprint,
         createChecksums = checksums,
         verifyChecksums = checksums,
+        legacyStreamingChecksumEnabled = true,
         quickSave = true,
         showToken = "test",
     )

@@ -31,7 +31,7 @@ class Bp2BatchCompletionTest {
         val reported = CopyOnWriteArrayList<String>()
         val groups = mutableListOf<Int>()
         val observed = CompletableDeferred<Unit>()
-        val server = Bp2TlsServer(receiver, scope, { it == sender.fingerprint.lowercase() }, { connection ->
+        val server = Bp2TlsServer(receiver, scope, { connection ->
             try {
                 val initial = Bp2Controls.decode(connection.receive()!!.payload)
                 connection.sendControl(Bp2.json.encodeToJsonElement(Bp2HelloAck(

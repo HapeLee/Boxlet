@@ -37,8 +37,9 @@ if (-not $Source) {
     $Source = Get-ChildItem -LiteralPath $artifacts -Directory -Filter "Boxlet-windows-x64-$Version-*" |
         Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName
 }
-$exe = if ($Source) { Join-Path $Source 'Boxlet.Windows.exe' } else { $null }
-if (-not $exe -or -not (Test-Path -LiteralPath $exe)) {
+$exe = if ($Source) { Join-Path $Source 'Boxlet.exe' } else { $null }
+if (-not $exe -or -not (Test-Path -LiteralPath $exe) -or
+    -not (Test-Path -LiteralPath (Join-Path $Source 'app/Boxlet.Windows.exe'))) {
     throw "Portable folder not found or incomplete: $Source"
 }
 

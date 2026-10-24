@@ -1,30 +1,51 @@
 package dev.boxlet.shared
 
 import dev.boxlet.core.protocol.BoxletJson
+import dev.boxlet.core.protocol.Protocol
+import dev.boxlet.shared.repository.SettingsRepository
+import kotlinx.coroutines.*
+import java.nio.file.Files
 import kotlin.test.*
 
 class Bp2PreferencesTest {
-    @Test fun nativeDefaultMigratesMissingFieldButPreservesExplicitOptOut() {
-        assertTrue(Settings().bp2Enabled)
-        assertTrue(BoxletJson.decodeFromString<Settings>("{}").bp2Enabled)
-        assertFalse(BoxletJson.decodeFromString<Settings>("""{"bp2Enabled":false}""").bp2Enabled)
+    @Test fun productDefaultUsesLocalSendWhileExplicitDeveloperOptInRemainsAvailable() {
+        assertFalse(Settings().bp2Enabled)
+        assertEquals(Protocol.LOCALSEND_PORT, Settings().port)
+        assertFalse(BoxletJson.decodeFromString<Settings>("{}").bp2Enabled)
+        assertTrue(BoxletJson.decodeFromString<Settings>("""{"bp2Enabled":true}""").bp2Enabled)
     }
 
-    @Test fun manualEndpointAcceptsCustomPortsAndIpv6WithoutAcceptingUrlsOrCredentials() {
-        assertEquals(Bp2Endpoint("192.168.1.2", 53318), parseBp2Endpoint(" 192.168.1.2 "))
-        assertEquals(Bp2Endpoint("boxlet.local", 54321), parseBp2Endpoint("boxlet.local:54321"))
-        assertEquals(Bp2Endpoint("::1", 53318), parseBp2Endpoint("[::1]"))
-        assertEquals(Bp2Endpoint("::1", 54321), parseBp2Endpoint("[::1]:54321"))
-        listOf("", "x:", "x:0", "x:65536", "::1", "x/path", "x?query", "x#fragment", "user@x", "https://x").forEach {
-            assertFailsWith<IllegalArgumentException>(it) { parseBp2Endpoint(it) }
-        }
+    @Test fun priorDefaultsMigrateOnceWithoutChangingCustomPortsOrReceivePreferences() = runBlocking {
+        val directory = Files.createTempDirectory("boxlet-settings-").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            for ((priorPort, expectedPort) in listOf(53318 to 53317, 54321 to 54321)) {
+                val file = directory.resolve("$priorPort.json")
+                file.writeText("""{"alias":"My device","bp2Enabled":true,"port":$priorPort,"quickSaveFromFavorites":true,"createChecksums":false}""")
+                val repository = SettingsRepository(file, scope, Settings())
+                val migrated = repository.state.value
+                assertFalse(migrated.bp2Enabled)
+                assertEquals(expectedPort, migrated.port)
+                assertEquals("My device", migrated.alias)
+                assertTrue(migrated.quickSaveFromFavorites)
+                assertFalse(migrated.createChecksums)
+                withTimeout(5000) { while (runCatching {
+                    BoxletJson.decodeFromString<Settings>(file.readText()).protocolDefaultsVersion
+                }.getOrDefault(0) != 1) delay(10) }
+                // An explicit experiment after migration is not reset on every subsequent launch.
+                file.writeText(BoxletJson.encodeToString(Settings.serializer(), migrated.copy(bp2Enabled = true)))
+                assertTrue(SettingsRepository(file, scope, Settings()).state.value.bp2Enabled)
+            }
+        } finally { scope.cancel(); directory.deleteRecursively() }
     }
 
-    @Test fun pairingRequiresFullFingerprintAndRejectsSelf() {
-        val self = "a".repeat(64)
-        assertNotNull(bp2PairingError(self.uppercase(), self))
-        assertNotNull(bp2PairingError("b".repeat(63), self))
-        assertNotNull(bp2PairingError("g".repeat(64), self))
-        assertNull(bp2PairingError(" B" + "b".repeat(63) + " ", self))
+    @Test fun removedPairingFieldsDoNotBreakReceivePreferencesOrReappearWhenSaved() {
+        val settings = BoxletJson.decodeFromString<Settings>(
+            """{"bp2RequirePairing":true,"bp2TrustedPeers":["${"a".repeat(64)}"],"quickSave":false,"quickSaveFromFavorites":true}""")
+        assertFalse(settings.quickSave)
+        assertTrue(settings.quickSaveFromFavorites)
+        val saved = BoxletJson.encodeToString(Settings.serializer(), settings)
+        assertFalse("bp2RequirePairing" in saved)
+        assertFalse("bp2TrustedPeers" in saved)
     }
 }

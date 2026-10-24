@@ -109,8 +109,11 @@ git push origin v1.0.0
 | `Boxlet-<版本>-web.zip` | 浏览器端静态站点 |
 | `Boxlet-<版本>-engine.zip` | 无头引擎 `engine-host` |
 
-不打算发 Release 时可以先只打 tag 到本地验证，或者用
-「Actions → Release → Run workflow」手动输入版本号（不创建 tag）。
+Windows ZIP 解压后从顶层 `Boxlet.exe` 启动，依赖、语言资源、引擎和运行时都在 `app/`，须完整保留。打包前可运行 `windowsApp/tests/LauncherSmoke.ps1`（PowerShell 7）验证移动目录、中文路径、参数转发和 `--exit`；CI 与 Release 的 Windows 构建已接入该检查。
+
+不打算发 Release 时可以先只打 tag 到本地验证。手动执行
+「Actions → Release → Run workflow」会实际构建并发布；若对应 tag 不存在，
+会在本次运行的源码提交上创建 tag，已存在的 Release 会上传替换同名产物。
 
 ## 4. 需要的仓库密钥
 

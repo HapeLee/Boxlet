@@ -32,11 +32,11 @@ class StreamingChecksumTest {
     @AfterTest
     fun tearDown() { scope.cancel() }
 
-    private fun receiver() = TransferEngine(scope, security, storage).apply {
+    private fun receiver(legacyExtension: Boolean = true) = TransferEngine(scope, security, storage).apply {
         installConfig {
             EngineConfig(alias = "Receiver", deviceModel = null, fingerprint = security.fingerprint, quickSave = true,
                 // The negotiated trailer must still be checked when legacy verification is disabled.
-                verifyChecksums = false)
+                verifyChecksums = false, legacyStreamingChecksumEnabled = legacyExtension)
         }
     }
 
@@ -55,6 +55,18 @@ class StreamingChecksumTest {
             ByteArrayInputStream(bytes), bytes.size.toLong()) {}
 
     private fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    @Test fun standardEndpointDoesNotAdvertiseOrAcceptPrivateChecksumTrailers() = runBlocking {
+        val receiver = receiver(legacyExtension = false)
+        assertNull(receiver.localInfo().sendeeCapabilities)
+        val result = receiver.onPrepareUpload(PrepareUploadRequest(
+            RegisterRequest(alias = "Sender", fingerprint = "sender", protocol = ProtocolType.HTTP),
+            mapOf("f" to FileDto("f", "test.bin", 3, "application/octet-stream",
+                sendeeChecksum = Protocol.STREAMING_CHECKSUM))), null, "127.0.0.1", null)
+        assertIs<PrepareUploadOutcome.Invalid>(result)
+        assertNull(receiver.state.value.pendingReceive)
+        assertEquals(0, commits)
+    }
 
     @Test
     fun corruptPayloadIsAbortedAndRetryCanCommit() = runBlocking {

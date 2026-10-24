@@ -10,12 +10,11 @@ import dev.boxlet.core.transport.bp2.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import okio.Buffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Experimental BP/2 adapter, sharing application storage/UI but no LocalSend wire handlers. */
+/** BP/2 adapter, sharing application storage/UI but no LocalSend wire handlers. */
 internal class Bp2EngineAdapter(
     parent: CoroutineScope,
     private val security: SecurityContext,
@@ -89,11 +88,10 @@ internal class Bp2EngineAdapter(
     }
 
     fun start(): AdapterState {
-        config().bp2TrustedPeers.forEach { Bp2.requireFingerprint(it.lowercase()) }
         resumeStore = runCatching { storage.bp2ResumeStore() }.getOrNull()
-        resumeStore?.cleanup(config().bp2TrustedPeers.map { it.lowercase() }.toSet())
-        scope.launch { while (isActive) { delay(60000); resumeStore?.cleanup(config().bp2TrustedPeers.map { it.lowercase() }.toSet()) } }
-        server = Bp2TlsServer(security, scope, ::trusted, ::acceptConnection)
+        resumeStore?.cleanup()
+        scope.launch { while (isActive) { delay(60000); resumeStore?.cleanup() } }
+        server = Bp2TlsServer(security, scope, ::acceptConnection)
         port = server!!.start(config().bp2Port)
         hello().validateNative(security.fingerprint.lowercase())
         restoreSend()
@@ -123,7 +121,6 @@ internal class Bp2EngineAdapter(
         try { verifiedPeer(session.peer); session.awaitClosed() } finally { sessions -= session }
     }
 
-    private fun trusted(fingerprint: String): Boolean = config().bp2TrustedPeers.any { it.equals(fingerprint, true) }
     private fun hello() = Bp2Hello(requestId = newBp2Id(), deviceId = security.fingerprint.lowercase(),
         alias = config().alias, deviceType = config().deviceType.name.lowercase(),
         features = listOf("send", "receive", "batch", "pause") + if (resumeStore != null) listOf("resume", "reset-file") else emptyList(),
@@ -131,7 +128,6 @@ internal class Bp2EngineAdapter(
 
     fun announceNow() { discovery?.announceNow() }
     fun connectPeer(host: String, peerPort: Int, fingerprint: String) {
-        require(trusted(fingerprint)) { "AUTH_REQUIRED: register the verified certificate fingerprint first" }
         require(host.isNotBlank() && host.length <= 253 && host.none { it.isWhitespace() })
         val announcement = Bp2Announcement(deviceId = fingerprint.lowercase(), alias = "Manual connection",
             deviceType = "desktop", tlsPort = peerPort).also { it.validate() }
@@ -141,30 +137,30 @@ internal class Bp2EngineAdapter(
     private suspend fun openConnection(channel: DeviceChannel, fingerprint: String) =
         Bp2TlsClient.connect(channel.host, channel.port, security, fingerprint, scope)
     private fun discover(host: String, announcement: Bp2Announcement, manual: Boolean) {
-        // Never turn an unauthenticated multicast ID into a trusted/merged application peer.
+        // The announcement pin must match TLS/HELLO before a device is exposed; it is never saved as trust.
         val fingerprint = announcement.deviceId
-        if (!trusted(fingerprint) || stopped.get()) return
+        if (stopped.get()) return
         val key = fingerprint
         if (probes.size >= 1024 && !probes.containsKey(key)) return
         val now = System.currentTimeMillis()
         val previous = probes.put(key, now)
         if (previous != null && now - previous < 4000) return
+        // Drop busy discovery probes; the next announcement retries without an unbounded queue.
+        if (!probePermits.tryAcquire()) return
         scope.launch {
-            probePermits.withPermit {
-                runCatching {
-                    val connection = openConnection(DeviceChannel(host, announcement.tlsPort, true, Bp2.ADAPTER_ID), fingerprint)
-                    val owner = CompletableDeferred<Bp2Session>()
-                    val session = Bp2Session.open(connection, hello(), true, handler(owner), scope)
-                    owner.complete(session)
-                    try { ensureActive(); verifiedPeer(session.peer) } finally { session.close() }
-                }.onFailure { error ->
-                    if (manual && !stopped.get()) mutate { it.copy(error = "BP/2 连接失败：${error.message}") }
-                }
+            runCatching {
+                val connection = openConnection(DeviceChannel(host, announcement.tlsPort, true, Bp2.ADAPTER_ID), fingerprint)
+                val owner = CompletableDeferred<Bp2Session>()
+                val session = Bp2Session.open(connection, hello(), true, handler(owner), scope)
+                owner.complete(session)
+                try { ensureActive(); verifiedPeer(session.peer) } finally { session.close() }
+            }.onFailure { error ->
+                if (manual && !stopped.get()) mutate { it.copy(error = "BP/2 连接失败：${error.message}") }
             }
-        }
+        }.invokeOnCompletion { probePermits.release() }
     }
     private fun verifiedPeer(peer: Bp2Peer) {
-        if (stopped.get() || !trusted(peer.fingerprint)) return
+        if (stopped.get()) return
         val peerPort = peer.hello.listenPort ?: return
         onDevice(Device(fingerprint = peer.fingerprint.uppercase(), alias = peer.hello.alias, version = "BP/2.0",
             deviceType = runCatching { DeviceType.valueOf(peer.hello.deviceType.uppercase()) }.getOrDefault(DeviceType.DESKTOP),
@@ -199,7 +195,6 @@ internal class Bp2EngineAdapter(
             var session: Bp2Session? = null
             try {
                 currentCoroutineContext().ensureActive()
-                require(trusted(device.fingerprint)) { "AUTH_REQUIRED：请先登记对方设备的完整证书指纹" }
                 val connection = openConnection(channel, device.fingerprint)
                 val owner = CompletableDeferred<Bp2Session>()
                 session = Bp2Session.open(connection, hello(), true, handler(owner), scope)
@@ -310,7 +305,6 @@ internal class Bp2EngineAdapter(
         if (sendingSession != null) return // The active sender sends the authenticated CANCEL on its own connection.
         scope.launch {
             runCatching {
-                require(trusted(task.device.fingerprint))
                 val connection = openConnection(task.channel, task.device.fingerprint)
                 val owner = CompletableDeferred<Bp2Session>()
                 val session = Bp2Session.open(connection, hello(), true, handler(owner), scope); owner.complete(session)
@@ -351,7 +345,6 @@ internal class Bp2EngineAdapter(
             mutate { it.copy(error = "发送恢复记录无法验证，已隔离，未恢复任务") }
             return
         } ?: return
-        if (!trusted(saved.device.fingerprint)) { clearJournal(saved.transferId); return }
         val files = saved.files.map { Bp2OutgoingFile(it.entry, journal.source(it)) }
         val view = View(saved.transferId, files.map { file -> file.entry.state().let {
             if (file.entry.fileId in saved.accepted) it else it.copy(status = FileTransferStatus.SKIPPED)
@@ -389,14 +382,12 @@ internal class Bp2EngineAdapter(
     private fun handler(owner: CompletableDeferred<Bp2Session>) = object : Bp2SessionHandler {
         override val resumeStore get() = this@Bp2EngineAdapter.resumeStore
         override suspend fun onAuthorizedResume(peer: Bp2Peer, transferId: String) {
-            require(trusted(peer.fingerprint)) { "AUTH_FAILED" }
             val previous = receiving?.takeIf { it.id == transferId && it.session.peer.fingerprint == peer.fingerprint } ?: return
             if (previous.session === owner.await()) return
             previous.session.close()
             withTimeout(5000) { previous.session.awaitClosed() }
         }
         override suspend fun onResuming(peer: Bp2Peer, transferId: String, entries: List<Bp2Entry>, positions: List<Bp2ResumePosition>) {
-            require(trusted(peer.fingerprint)) { "AUTH_FAILED" }
             if (!receiveGate.tryLock()) error("BUSY")
             try {
                 if (legacyBusy() || !busy.compareAndSet(false, true)) error("BUSY")
@@ -422,7 +413,6 @@ internal class Bp2EngineAdapter(
             onReceived(peer, transferId, entry)
         }
         override suspend fun onOffer(peer: Bp2Peer, transferId: String, entries: List<Bp2Entry>): Set<String> {
-            require(trusted(peer.fingerprint)) { "AUTH_FAILED" }
             if (!receiveGate.tryLock()) error("BUSY")
             try {
                 if (legacyBusy() || !busy.compareAndSet(false, true)) error("BUSY")

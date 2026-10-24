@@ -58,7 +58,7 @@ MinVersion=10.0.22621
 
 OutputBaseFilename=Boxlet-Setup-{#AppVersion}-x64
 SetupIconFile=..\design\brand\boxlet.ico
-UninstallDisplayIcon={app}\Boxlet.Windows.exe
+UninstallDisplayIcon={app}\Boxlet.exe
 UninstallDisplayName=Boxlet
 Compression=lzma2/max
 SolidCompression=yes
@@ -78,16 +78,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; 整个便携目录原样安装：exe、DLL、Assets、engine\lib、runtime 都不能少
+; 整个便携目录原样安装：顶层启动器及 app 子目录都不能少
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Boxlet"; Filename: "{app}\Boxlet.Windows.exe"; WorkingDir: "{app}"
+Name: "{group}\Boxlet"; Filename: "{app}\Boxlet.exe"; WorkingDir: "{app}"
 Name: "{group}\{cm:UninstallProgram,Boxlet}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Boxlet"; Filename: "{app}\Boxlet.Windows.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Boxlet"; Filename: "{app}\Boxlet.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Boxlet.Windows.exe"; Description: "{cm:LaunchProgram,Boxlet}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Boxlet.exe"; Description: "{cm:LaunchProgram,Boxlet}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 运行时可能在安装目录里留下日志或缓存，卸载时一并清掉
@@ -98,11 +98,15 @@ Type: filesandordirs; Name: "{app}"
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
+  Launcher: String;
 begin
   Result := '';
-  if FileExists(ExpandConstant('{app}\Boxlet.Windows.exe')) then
+  Launcher := ExpandConstant('{app}\Boxlet.exe');
+  if not FileExists(Launcher) then
+    Launcher := ExpandConstant('{app}\Boxlet.Windows.exe');
+  if FileExists(Launcher) then
   begin
-    Exec(ExpandConstant('{app}\Boxlet.Windows.exe'), '--exit', '', SW_HIDE,
+    Exec(Launcher, '--exit', '', SW_HIDE,
       ewWaitUntilTerminated, ResultCode);
     Sleep(1200);
   end;

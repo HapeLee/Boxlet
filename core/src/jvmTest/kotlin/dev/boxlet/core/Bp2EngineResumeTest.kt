@@ -91,14 +91,14 @@ class Bp2EngineResumeTest {
         override fun close() { listener.close(); sockets.forEach { runCatching { it.close() } }; job.cancel() }
     }
     private fun engine(left: Boolean, journal: Bp2SendJournal? = null): TransferEngine {
-        val own = if (left) leftId else rightId; val peer = if (left) rightId else leftId
+        val own = if (left) leftId else rightId
         val selectedStorage = if (!left) storage else object : ReceiveStorage {
             override suspend fun createDestination(sessionId: String, file: FileDto, senderAlias: String): ReceiveDestination = error("Unexpected receive")
         }
         return TransferEngine(scope, own, selectedStorage, journal).also {
             it.installConfig { EngineConfig(alias = if (left) "Left" else "Right", deviceModel = "Test", fingerprint = own.fingerprint,
                 port = 0, bp2Port = 0, bp2Enabled = true,
-                quickSave = true, bp2TrustedPeers = setOf(peer.fingerprint)) }
+                quickSave = true) }
             it.start(); engines += it
         }
     }
@@ -205,7 +205,7 @@ class Bp2EngineResumeTest {
         paused(sender)
         assertNotNull(saved.load())
         val enabled = EngineConfig(alias = "Left", deviceModel = "Test", fingerprint = leftId.fingerprint,
-            port = 0, bp2Port = 0, bp2Enabled = true, quickSave = true, bp2TrustedPeers = setOf(rightId.fingerprint))
+            port = 0, bp2Port = 0, bp2Enabled = true, quickSave = true)
         sender.installConfig { enabled.copy(bp2Enabled = false) }; sender.restart()
         assertEquals(TransferStatus.PAUSED, sender.state.value.outgoing?.status)
         sender.cancelSend()

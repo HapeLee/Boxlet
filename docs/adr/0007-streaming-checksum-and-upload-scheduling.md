@@ -3,7 +3,7 @@
 - 状态：已实现
 - 日期：2026-10-23
 
-> 后续定位：本文保留 BP/2 迁移前的私有扩展设计。原生应用现已默认启用 BP/2，此时 LocalSend 兼容通道使用纯标准格式；仅在关闭 BP/2 且显式协商时保留旧尾摘要扩展。最终清理范围见 [ADR 0008](0008-boxlet-primary-protocol.md)，当前行为见 [LocalSend 实现记录](../protocol/LOCALSEND-IMPLEMENTATION.md)。
+> 后续定位：本文保留 BP/2 迁移前的私有扩展设计。原生应用当前默认使用标准 LocalSend，BP/2 默认关闭。旧尾摘要扩展只供底层显式开启 legacyStreamingChecksumEnabled 的测试/基准协商，关闭 BP/2 不会自动启用它。最终清理范围见 [ADR 0008](0008-boxlet-primary-protocol.md)，当前行为见 [LocalSend 实现记录](../protocol/LOCALSEND-IMPLEMENTATION.md)。
 
 设计时原生互传使用 LocalSend v2 API。标准 LocalSend 的可选 SHA-256 位于 prepare-upload 元数据中，提供该摘要时需要预读文件。本 ADR 增加显式协商的扩展，并保留标准上传格式。
 

@@ -64,12 +64,12 @@ engine-host --data-dir <path>
 | `alias` / `port` / `https` / `fingerprint` | 本机信息 |
 | `error` | 当前错误（可被下一次成功操作覆盖） |
 | `devices[]` | `fingerprint / alias / deviceType / deviceModel / lastSeen / channels[]` |
-| `protocols[]` | 各适配器的 `adapterId / enabled / discoveryReady / sendReady / receiveReady / reason`；默认启用 `localsend-v2` 和 `boxlet-bp2`，各服务独立报告实际就绪状态；已有显式关闭配置保持关闭 |
+| `protocols[]` | 各适配器的 `adapterId / enabled / discoveryReady / sendReady / receiveReady / reason`；默认仅启用 `localsend-v2`；内部实验显式启用 `boxlet-bp2` 后独立报告实际就绪状态 |
 | `share` | 活动中的浏览器分享：`url / sessionId / fileCount / totalBytes / pinRequired`，无会话时不出现 |
 | `pendingReceive` | 待确认的接收请求；`files[]` 含 `id / fileName / size / fileType` |
 | `outgoing` / `incoming` | `sessionId / peer / adapterId / status / progress / transferredBytes / totalBytes / error`；adapterId 是实际协议 |
 
-`devices[].channels[]` 包含 `host / port / https / adapterId / identityVerified`。BP/2 通道仅在已登记证书完成 TLS/HELLO 验证后加入，`identityVerified:true`；原有 LocalSend 通道默认 `adapterId:"localsend-v2"`。发现公告本身不能建立 BP/2 信任。原生 BP/2 数据链路仅使用 TCP/TLS，不提供额外 UDP 数据端口、载体开关或路由字段。
+`devices[].channels[]` 包含 `host / port / https / adapterId / identityVerified`。BP/2 通道仅在内部实验启用且完成 TLS/HELLO 验证后加入，`identityVerified:true`；原有 LocalSend 通道默认 `adapterId:"localsend-v2"`。发现公告本身不能建立 BP/2 信任。原生 BP/2 数据链路仅使用 TCP/TLS，不提供额外 UDP 数据端口、载体开关或路由字段。
 
 `outgoing/incoming.files[]` 包含 `id / fileName / size / fileType / status / bytesTransferred / savedPath / error`，用于逐文件进度及实际落盘路径。历史按稳定完成 ID 去重，重连查询已完成结果不会重复追加记录。
 
@@ -85,21 +85,19 @@ engine-host --data-dir <path>
 
 返回 `alias / port / https / serverRunning / fingerprint / protocol / deviceCount / bp2Enabled / bp2Port`。`port` 是设置值，实际 LocalSend 监听端口见 `state.port`；`bp2Port` 是实际原生绑定端口，未运行时为 0。`protocol` 保留 LocalSend 兼容版本，不能用它判断任务走哪套协议，应读取任务的 `adapterId`。
 
-### bp2.trust-peer / bp2.untrust-peer / bp2.connect
+### bp2.connect
 
-原生应用与 engine-host 默认启用 BP/2，已有显式关闭设置保持关闭。完整流程见 [BP/2 使用说明](protocol/BP2-EXPERIMENTAL.md)。先通过可信渠道核对双方完整证书指纹，然后在双方分别登记对端：
+原生应用与 engine-host 默认使用标准 LocalSend，BP/2 默认关闭；三端不提供 BP/2 设置入口。内部测试可以用 settings.set 显式启用 BP/2。无需配对或登记指纹，接收权限由接收确认、收藏设备自动接收和快速保存规则决定。完整流程见 [BP/2 使用说明](protocol/BP2-EXPERIMENTAL.md)。
+
+自动发现不可用时，诊断工具可以通过已知端点及期望证书身份发起连接；该指纹用于连接校验，不创建配对记录：
 
 ```json
-{"id":"enable","command":"settings.set","params":{"bp2Enabled":true}}
-{"id":"trust","command":"bp2.trust-peer","params":{"fingerprint":"对端完整64位十六进制指纹"}}
-{"id":"connect","command":"bp2.connect","params":{"host":"192.168.1.20","port":53318,"fingerprint":"对端完整64位十六进制指纹"}}
-{"id":"revoke","command":"bp2.untrust-peer","params":{"fingerprint":"对端完整64位十六进制指纹"}}
+{"id":"connect","command":"bp2.connect","params":{"host":"192.168.1.20","port":53318,"fingerprint":"对端完整64位十六进制证书指纹"}}
 ```
 
-- 登记/撤销接受大小写十六进制指纹，持久化后返回 `updated:true`；不允许登记自身。信任修改会重启引擎，中断当前任务并关闭已有连接。
-- `bp2.connect` 要求适配器已启用且指纹已登记，`port` 默认 53318。`started:true` 只表示开始异步连接；等 `state.devices` 中出现已验证 BP/2 通道才表示成功，失败由 `state.error` 报告。
-- 启用 BP/2 后，默认 LocalSend TCP 端口改为 53317，原生监听 53318；自定义端口保持配置值。两者冲突由 `protocols[].reason` 报告，不虚报就绪。
-- `bp2Enabled / bp2Port / bp2TrustedPeers` 均由 Settings 持久化；默认分别为 `true / 53318 / []`。Android、Compose 桌面、WinUI 均有指纹配对界面；普通文件系统支持双方重启续传，Android SAF/MediaStore 接收续传与 WSS 尚未完成。
+- `bp2.connect` 要求适配器已启用，以传入指纹校验 TLS，并验证 HELLO 与实际证书一致；`port` 默认 53318。`started:true` 只表示开始异步连接，等 `state.devices` 出现已验证 BP/2 通道才表示成功。
+- 启用 BP/2 后，默认 LocalSend TCP 端口为 53317，BP/2 监听 53318；自定义端口保持配置值。冲突由 `protocols[].reason` 报告。
+- `bp2Enabled / bp2Port` 由 Settings 持久化，默认为 `false / 53318`。`protocolDefaultsVersion` 是内部一次迁移标记，旧配置会切回 LocalSend，旧默认接收端口 53318 改为 53317，其他自定义端口与接收偏好保留；迁移后显式设置的实验配置可继续持久化。已移除 `bp2.trust-peer / bp2.untrust-peer` 命令及配对配置。普通文件系统支持双方重启续传，Android SAF/MediaStore 接收续传与 WSS 尚未完成。
 
 ### devices.scan
 

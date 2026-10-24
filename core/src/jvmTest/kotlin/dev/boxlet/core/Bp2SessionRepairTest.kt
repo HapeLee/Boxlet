@@ -17,7 +17,7 @@ class Bp2SessionRepairTest {
         val data = ByteArray(2 * Bp2.CHUNK_BYTES) { (it * 7).toByte() }
         val published = CompletableDeferred<ByteArray>()
         val repairs = AtomicInteger()
-        val server = Bp2TlsServer(receiver, scope, { it == sender.fingerprint.lowercase() }, { connection ->
+        val server = Bp2TlsServer(receiver, scope, { connection ->
             val initial = Bp2Controls.decode(connection.receive()!!.payload)
             connection.sendControl(Bp2.json.encodeToJsonElement(Bp2HelloAck(replyTo = initial["requestId"]!!.jsonPrimitive.content,
                 connectionId = newBp2Id(), deviceId = receiver.fingerprint.lowercase(), alias = "Repair peer",

@@ -130,7 +130,7 @@ object Bp2ProtocolBenchmark {
         }
         fun config(identity: SecurityContext, other: SecurityContext) = EngineConfig(
             alias = "Benchmark", deviceModel = "JVM benchmark", fingerprint = identity.fingerprint, port = 0, protocolType = ProtocolType.HTTPS,
-            bp2Enabled = true, bp2Port = 0, bp2TrustedPeers = setOf(other.fingerprint),
+            bp2Enabled = true, bp2Port = 0,
             createChecksums = true, verifyChecksums = true, quickSave = true,
         )
         val receiver = TransferEngine(scope, receiverIdentity, storage)

@@ -153,7 +153,7 @@ class Bp2TlsConnection internal constructor(
 }
 
 object Bp2TlsClient {
-    /** A pin is mandatory; an untrusted UDP announcement is not authorization to send. */
+    /** Always verify the expected certificate pin; receive consent is handled by the session. */
     suspend fun connect(
         host: String, port: Int, identity: SecurityContext, expectedFingerprint: String, scope: CoroutineScope,
     ): Bp2TlsConnection {
@@ -188,8 +188,6 @@ object Bp2TlsClient {
 class Bp2TlsServer(
     private val identity: SecurityContext,
     private val scope: CoroutineScope,
-    /** Must consult established trust / explicit pairing; no implicit trust from discovery. */
-    private val authorizePeer: suspend (String) -> Boolean,
     private val onConnection: suspend (Bp2TlsConnection) -> Unit,
     private val onFailure: (Throwable) -> Unit = {},
 ) : AutoCloseable {
@@ -229,8 +227,6 @@ class Bp2TlsServer(
                             tls.configureBp2()
                             tls.startHandshake()
                             (tls.session.peerCertificates.first() as java.security.cert.X509Certificate).checkValidity()
-                            val peer = requireNotNull(Certificates.peerFingerprint(tls.session)).lowercase()
-                            require(withTimeout(10000) { authorizePeer(peer) }) { "BP/2 peer is not authorized" }
                             ensureActive()
                             connection = Bp2TlsConnection(tls, transport, this)
                             onConnection(connection)

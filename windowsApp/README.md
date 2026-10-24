@@ -6,7 +6,7 @@ Mica、窗口圆角、最小化/最大化/还原和标题栏按钮由 Windows / 
 
 ## 启动
 
-**普通用户请使用便携发布包，解压整个目录后双击 `Boxlet.Windows.exe`。不需要安装 .NET SDK、.NET Runtime、Windows App SDK 或 Java。**
+**普通用户请使用便携发布包，解压整个目录后双击顶层的 `Boxlet.exe`。不需要另装 .NET SDK、.NET Runtime、Windows App SDK 或 Java。**
 下面的 `run.ps1` 是从源码开发/构建使用的入口，不是普通用户启动方式。
 
 要求 Windows 11 22H2+、.NET 10 SDK、JDK 21；支持 x64。Reactor 目前为预览版，依赖版本已固定。
@@ -28,7 +28,7 @@ Mica、窗口圆角、最小化/最大化/还原和标题栏按钮由 Windows / 
 
 关闭窗口会收进系统托盘；点击托盘图标显示，右键可退出。
 最小化按钮使用原生任务栏最小化。再次启动唤起已有窗口。
-构建前退出应用，或调用正在运行版本的 `Boxlet.Windows.exe --exit` 优雅退出并停止引擎。
+构建前退出应用，或调用正在运行版本的 `Boxlet.exe --exit`（开发构建为 `Boxlet.Windows.exe --exit`）优雅退出并停止引擎。
 窗口动画遵循 Windows 自身的动画设置，未修改系统设置。
 
 ## 架构与数据
@@ -51,12 +51,26 @@ Java 优先使用应用目录的 `runtime/bin/java.exe`，开发构建再查找 
 ### 便携包（免安装）
 
 `publish.ps1` 生成完整便携目录和 ZIP。请分发整个 ZIP，不能只分发 exe。每次输出到新的 `artifacts/Boxlet-windows-x64-时间戳` 目录。
-默认从 Gradle 工具链中选择 Eclipse Temurin JDK，也可通过 `-JavaHome` 指定允许再分发的 x64 OpenJDK。运行时的许可证保留在 `runtime/legal`。
+
+```text
+Boxlet/
+├─ Boxlet.exe        启动入口
+├─ app/              WinUI、依赖、语言资源、引擎和运行时
+└─ START-HERE.txt     使用说明
+```
+
+启动器不显示控制台窗口，按自身位置定位 `app/Boxlet.Windows.exe`，将工作目录设为 `app` 并完整转发参数。移动解压目录后仍可启动；`--exit` 会等待内部程序退出并转发退出码，安装包快捷方式同样指向顶层入口。WinUI 的资源索引和依赖保留原有相对布局，语言资源不裁剪。
+
+轻量启动器使用受支持的 Windows 11 自带的 .NET Framework，参见 [Microsoft 的系统组件说明](https://devblogs.microsoft.com/dotnet/upcoming-availability-of-net-framework-4-8-1-on-windows-update-and-catalog/)。构建时由 `Build-Launcher.ps1` 调用系统 C# 编译器，不增加新的 SDK 工具链；主程序继续使用包内的 .NET 10 与 Windows App SDK。
+
+默认从 Gradle 工具链中选择 Eclipse Temurin JDK，也可通过 `-JavaHome` 指定允许再分发的 x64 OpenJDK。运行时的许可证保留在 `app/runtime/legal`。
 
 ```powershell
 .\windowsApp\publish.ps1
 # 指定打包使用的 OpenJDK
 .\windowsApp\publish.ps1 -JavaHome C:\path\to\temurin-jdk
+# 独立验证启动器的路径、参数转发、移动目录和退出行为（PowerShell 7）
+.\windowsApp\tests\LauncherSmoke.ps1
 ```
 
 ### 安装包（带卸载）
@@ -66,7 +80,7 @@ Java 优先使用应用目录的 `runtime/bin/java.exe`，开发构建再查找 
 - 按用户安装到 `%LOCALAPPDATA%\Programs\Boxlet`，默认不需要管理员权限；
 - 创建开始菜单快捷方式，桌面图标可选；
 - 在「设置 → 应用 → 已安装的应用」里注册卸载项，卸载程序是安装目录下的 `unins000.exe`；
-- 升级安装会先调用 `Boxlet.Windows.exe --exit` 让旧实例优雅退出，再覆盖文件；
+- 升级安装会先调用 `Boxlet.exe --exit` 让旧实例优雅退出，再覆盖文件；兼容旧平铺目录的退出入口；
 - 卸载结束会询问是否一并删除 `%APPDATA%\Boxlet` 里的配置、证书、收藏与接收历史（静默卸载时不询问，默认保留）。
 
 需要先装编译工具（只需一次）：`winget install --id JRSoftware.InnoSetup -e`。
