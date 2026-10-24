@@ -1,21 +1,17 @@
 name: Release
 
-# 打 tag（v主.次.修订，例如 v1.0.0）即触发：四端构建 -> 生成 GitHub Release -> 发 Telegram。
-# 版本号的唯一来源就是这个 tag，所有产物共用同一个版本号（十进制编码，见根 build.gradle.kts）。
+# 修改 version.properties 后手动运行，无需填写版本号；也支持推送与配置一致的 tag。
+# 四端构建 -> 生成 GitHub Release -> 发 Telegram。版本由根 Gradle 配置统一计算。
 
 on:
   push:
     tags:
       - 'v[0-9]*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: '版本号（不带 v，例如 1.2.3）'
-        required: true
-        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  # 正式版与 beta 共用发布锁，防止不同入口同时分配同一个版本。
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -28,22 +24,35 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - name: 从 tag 或手动输入得到版本号
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 从 version.properties 计算发布版本
         id: version
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            version="${{ inputs.version }}"
-          else
-            version="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            export BOXLET_RELEASE_TAG="$GITHUB_REF_NAME"
           fi
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}$'; then
-            echo "版本号格式不正确：'$version'（期望 主.次.修订 三段数字，每段 ≤ 99，例如 1.0.0）" >&2
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          output="$(./gradlew -q printBoxletReleaseVersion --console=plain)"
+          printf '%s\n' "$output"
+          version="$(printf '%s\n' "$output" | sed -n 's/^BOXLET_RELEASE_VERSION=//p')"
+          tag="$(printf '%s\n' "$output" | sed -n 's/^BOXLET_RELEASE_TAG=//p')"
+          prerelease="$(printf '%s\n' "$output" | sed -n 's/^BOXLET_PRERELEASE=//p')"
+          test -n "$version" && test -n "$tag"
+          [[ "$prerelease" == "true" || "$prerelease" == "false" ]]
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
           echo "发布版本：$version"
 
   android:
@@ -237,6 +246,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -253,10 +263,14 @@ jobs:
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
           else
+            release_args=()
+            if [ "$PRERELEASE" = "true" ]; then
+              release_args+=(--prerelease)
+            fi
             gh release create "$tag" dist/* \
               --target "$GITHUB_SHA" \
               --title "Boxlet ${VERSION}" \
-              --generate-notes
+              --generate-notes "${release_args[@]}"
           fi
 
   notify:

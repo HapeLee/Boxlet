@@ -20,7 +20,7 @@
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed>
     <!--
-      统一版本号：根工程 build.gradle.kts 从 git tag 解析后由 CI 用 BOXLET_VERSION
+      统一版本号：根工程 build.gradle.kts 从 version.properties 解析后由 CI 用 BOXLET_VERSION
       环境变量传入，publish.ps1 也会显式传 -p:Version=。两者都没有时用开发基线。
     -->
     <Version Condition="'$(Version)' == '' and '$(BOXLET_VERSION)' != ''">$(BOXLET_VERSION)</Version>

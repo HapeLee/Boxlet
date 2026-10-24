@@ -1,7 +1,7 @@
 name: CI
 
 # 每次推到 main 和每个 PR 都跑：核心测试、Android Debug、浏览器端、Windows 打包冒烟。
-# 版本号由 git tag 解析（见根 build.gradle.kts），PR 构建自动带 -dev.N+gHASH 后缀。
+# 版本号由 version.properties 解析（见根 build.gradle.kts），开发构建附带 Git 信息。
 
 on:
   push:

@@ -8,7 +8,7 @@
 #   .\windowsApp\pack.ps1
 #   .\windowsApp\pack.ps1 -Version 1.1.0 -JavaHome C:\path\to\temurin-jdk
 #   .\windowsApp\pack.ps1 -SkipPublish -Source artifacts\Boxlet-windows-x64-1.1.0-20261022-024934
-# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、git tag。
+# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、version.properties。
 param(
     [string]$Version,
     [string]$JavaHome,

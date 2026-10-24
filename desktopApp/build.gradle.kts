@@ -39,7 +39,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Boxlet"
-            // 统一版本号来自 git tag（根工程解析）；MSI/DEB 只接受 主.次.修订 形式。
+            // 统一版本号来自 version.properties（根工程解析）；MSI/DEB 只接受 主.次.修订 形式。
             packageVersion = (rootProject.extra["boxletVersionSemver"] as String)
                 .split('.')
                 .take(3)

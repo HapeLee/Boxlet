@@ -115,17 +115,19 @@ printf '{"id":"1","command":"status"}\n{"id":"2","command":"shutdown"}\n' \
 
 ## 版本号与发布
 
-版本号只有一个来源：git tag `vMAJOR.MINOR.PATCH`。数值按十进制拼接
+版本号统一在根目录 [`version.properties`](version.properties) 中维护。数值按十进制拼接
 （`major*10_000 + minor*100 + patch`，`v1.0.0` → `10000`、`v1.2.3` → `10203`），
 Android `versionCode`、Windows `FileVersion`、安装包版本、桌面 `packageVersion` 和界面显示的
-版本全部由它推导；不在 tag 上的构建带 `-dev.N+gHASH` 后缀。详见
+版本全部由它推导；本地开发构建附带 Git 信息。`VERSION_SUFFIX=0` 发布正式版，
+`1` 发布自动编号的 `-beta.N` 预发布版。详见
 [`docs/RELEASING.md`](docs/RELEASING.md)。
 
 ```bash
-./gradlew -q printBoxletVersion                                  # 查看当前统一版本号
-git tag -a v1.0.0 -m "Boxlet 1.0.0" && git push origin v1.0.0    # 打 tag 即触发发布流水线
+./gradlew -q printBoxletVersion           # 查看本地统一版本号
+./gradlew -q printBoxletReleaseVersion    # 预览下次发布版本（已有正式版 tag 时提示升版本）
 ```
 
+修改配置、提交并推送后，在 **Actions → Release → Run workflow** 直接运行，无需填写版本号。
 流水线见 [`.github/workflows/release.yml`](.github/workflows/release.yml)：四端并行构建 →
 GitHub Release → Telegram 通知；需要的 Actions 密钥与产物清单同样在
 [`docs/RELEASING.md`](docs/RELEASING.md)。

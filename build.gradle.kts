@@ -11,7 +11,7 @@ plugins {
 // ---------------------------------------------------------------------------
 // 统一版本号
 //
-// 唯一来源是 git tag：vMAJOR.MINOR.PATCH（三段，不使用第 4 段）。数值用十进制拼接，
+// 唯一来源是根目录 version.properties（三段，不使用第 4 段）。数值用十进制拼接，
 // 每段固定 2 位：
 //
 //   code = major * 10_000 + minor * 100 + patch
@@ -20,11 +20,11 @@ plugins {
 // 作用与 Android 的 versionCode 一致：随版本单调递增，段位一眼能对上版本名。
 // 每段上限 99，最大值 999999，远低于 Android 的 2100000000。
 // 同一版本内的修订直接递增 patch（1.2.99 -> 1.3.0 依然单调）。
-// tag 之后的提交与本地脏工作区只改变展示用的后缀（-dev.N+gHASH[.dirty]），
-// 不改变数值版本号；正式发布必须打在干净的 tag 上。
+// VERSION_SUFFIX=1 时本地显示 -beta.local，CI 根据已有 tag 分配 -beta.N。
+// 本地开发后缀不改变数值版本号；tag 用于记录发布与标识开发构建。
 //
 // CI 用 BOXLET_VERSION 环境变量（或 -PboxletVersion=）覆盖，这样打 tag 的流水线
-// 得到的就是 tag 对应的版本；本地构建没有该变量时回退到 git describe。
+// 四端使用同一个发布版本；本地构建没有覆盖值时读取 version.properties。
 // ---------------------------------------------------------------------------
 
 class BoxletVersionInfo(
@@ -35,19 +35,21 @@ class BoxletVersionInfo(
     val commit: String,
     val dirty: Boolean,
     val tagged: Boolean,
+    val prerelease: String = "",
 ) {
     /** 纯数值版本：1.2.3。 */
     val semver: String = "$major.$minor.$patch"
 
     /** 精确构建在干净 tag 上。 */
-    val release: Boolean = tagged && distance == 0 && !dirty
+    val release: Boolean = tagged && distance == 0 && !dirty && prerelease.isEmpty()
 
     /** 十进制拼接的数值版本号，Android versionCode 直接用它。 */
     val code: Int = major * 10_000 + minor * 100 + patch
 
     /** 对内展示的完整版本号：发布版 1.2.3，开发构建 1.2.3-dev.7+ga1b2c3d。 */
     val display: String = when {
-        release -> semver
+        prerelease.isNotEmpty() -> "$semver-$prerelease"
+        tagged && distance == 0 && !dirty -> semver
         distance > 0 -> "$semver-dev.$distance+g$commit" + if (dirty) ".dirty" else ""
         else -> "$semver+g$commit" + if (dirty) ".dirty" else ""
     }
@@ -66,45 +68,59 @@ fun boxletGit(vararg args: String): String? = try {
     null
 }
 
+// CI 与本地共用此解析器，避免 workflow 与各端分别维护版本规则。
+val boxletVersionProperties = java.util.Properties().apply {
+    val source = rootProject.file("version.properties")
+    require(source.isFile) { "缺少根目录 version.properties" }
+    source.reader(Charsets.UTF_8).use { load(it) }
+}
+fun boxletVersionPart(key: String): Int {
+    val value = boxletVersionProperties.getProperty(key)?.trim().orEmpty()
+    require(Regex("""(?:0|[1-9][0-9]?)""").matches(value)) {
+        "version.properties 中 $key 必须是 0–99 的整数（不带前导零），当前 '$value'"
+    }
+    return value.toInt()
+}
+val boxletMajor = boxletVersionPart("VERSION_MAJOR")
+val boxletMinor = boxletVersionPart("VERSION_MINOR")
+val boxletPatch = boxletVersionPart("VERSION_PATCH")
+val boxletSuffix = boxletVersionProperties.getProperty("VERSION_SUFFIX")?.trim()
+require(boxletSuffix in listOf("0", "1")) { "version.properties 中 VERSION_SUFFIX 必须是 0 或 1" }
+val boxletBaseVersion = "$boxletMajor.$boxletMinor.$boxletPatch"
+
 fun resolveBoxletVersion(): BoxletVersionInfo {
-    val pattern = Regex(
-        """^v?(\d{1,2})\.(\d{1,2})\.(\d{1,2})(?:-(\d+)-g([0-9a-fA-F]+))?(-dirty)?$""",
-    )
+    val pattern = Regex("""^v?(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)(?:-(beta\.(?:[1-9][0-9]*|local)))?$""")
     val requested = (providers.gradleProperty("boxletVersion").orNull
         ?: providers.environmentVariable("BOXLET_VERSION").orNull).nonBlank()
 
-    fun parse(text: String, fallbackCommit: String?): BoxletVersionInfo {
+    val commit = boxletGit("rev-parse", "--short=7", "HEAD") ?: "unknown"
+    val info = if (requested != null) {
+        val text = requested
         val match = pattern.matchEntire(text)
-            ?: throw GradleException("版本号格式非法：$text（期望 v主.次.修订 三段数字，每段 ≤ 99）")
-        return BoxletVersionInfo(
+            ?: throw GradleException("版本号格式非法：$text（期望 主.次.修订 或 主.次.修订-beta.N，每段 ≤ 99）")
+        BoxletVersionInfo(
             major = match.groupValues[1].toInt(),
             minor = match.groupValues[2].toInt(),
             patch = match.groupValues[3].toInt(),
-            distance = match.groupValues[4].ifEmpty { "0" }.toInt(),
-            commit = match.groupValues[5].ifEmpty { fallbackCommit ?: "unknown" },
-            dirty = match.groupValues[6].isNotEmpty(),
+            distance = 0,
+            commit = commit,
+            dirty = false,
             tagged = true,
+            prerelease = match.groupValues[4],
         )
-    }
-
-    val info = if (requested != null) {
-        parse(requested, boxletGit("rev-parse", "--short=7", "HEAD"))
     } else {
-        val described = boxletGit("describe", "--tags", "--match", "v[0-9]*", "--dirty")
-        if (described != null) {
-            parse(described, boxletGit("rev-parse", "--short=7", "HEAD"))
-        } else {
-            // 还没有任何 v* tag：按 0.1.0 作为开发基线（Android versionCode 不能为 0）。
-            BoxletVersionInfo(
-                major = 0,
-                minor = 1,
-                patch = 0,
-                distance = 0,
-                commit = boxletGit("rev-parse", "--short=7", "HEAD") ?: "unknown",
-                dirty = false,
-                tagged = false,
-            )
-        }
+        val tag = "v$boxletBaseVersion"
+        BoxletVersionInfo(
+            major = boxletMajor,
+            minor = boxletMinor,
+            patch = boxletPatch,
+            distance = (boxletGit("rev-list", "--count", "$tag..HEAD")
+                ?: boxletGit("rev-list", "--count", "HEAD"))?.toIntOrNull() ?: 0,
+            commit = commit,
+            dirty = boxletGit("status", "--porcelain") != null,
+            tagged = boxletGit("tag", "--points-at", "HEAD")?.lines()?.contains(tag) == true,
+            prerelease = if (boxletSuffix == "1") "beta.local" else "",
+        )
     }
 
     // 十进制拼接每段固定 2 位，因此每段最多 99；最大值 999999 远在 Android 的上限之内。
@@ -117,6 +133,7 @@ fun resolveBoxletVersion(): BoxletVersionInfo {
             "$name 必须 ≤ 99（当前 $value）：versionCode 按每段 2 位十进制拼接，${info.semver} → ${info.code}"
         }
     }
+    require(info.code > 0) { "版本号不能为 0.0.0：Android versionCode 必须大于 0" }
     return info
 }
 
@@ -149,7 +166,7 @@ val generateBoxletVersionSource = tasks.register("generateBoxletVersionSource") 
         file.parentFile.mkdirs()
         file.writeText(
             buildString {
-                appendLine("// 由 :generateBoxletVersionSource 从 git tag 生成，请勿手改。")
+                appendLine("// 由 :generateBoxletVersionSource 从 version.properties 生成，请勿手改。")
                 appendLine("package dev.boxlet.core")
                 appendLine()
                 appendLine("object BoxletBuild {")
@@ -187,3 +204,35 @@ tasks.register("printBoxletVersion") {
 }
 
 extra["boxletVersionTask"] = generateBoxletVersionSource
+
+// Release prepare 调用；只计算和校验，不创建 tag 或发布。
+tasks.register("printBoxletReleaseVersion") {
+    group = "help"
+    description = "从 version.properties 计算发布版本，校验 tag，并输出给 CI"
+    doLast {
+        val pushedTag = providers.environmentVariable("BOXLET_RELEASE_TAG").orNull.nonBlank()
+        val betaPattern = Regex("""^v${Regex.escape(boxletBaseVersion)}-beta\.([1-9][0-9]*)$""")
+        val version = if (pushedTag != null) {
+            require(if (boxletSuffix == "0") pushedTag == "v$boxletBaseVersion" else betaPattern.matches(pushedTag)) {
+                "tag '$pushedTag' 与 version.properties 不一致（版本 $boxletBaseVersion，VERSION_SUFFIX=$boxletSuffix）"
+            }
+            pushedTag.removePrefix("v")
+        } else {
+            val candidate = if (boxletSuffix == "0") boxletBaseVersion else {
+                val last = boxletGit("tag", "--list", "v$boxletBaseVersion-beta.*")
+                    ?.lineSequence()
+                    ?.mapNotNull { betaPattern.matchEntire(it)?.groupValues?.get(1) }
+                    ?.map { it.toInt() }
+                    ?.maxOrNull() ?: 0
+                "$boxletBaseVersion-beta.${Math.addExact(last, 1)}"
+            }
+            require(boxletGit("rev-parse", "--verify", "refs/tags/v$candidate") == null) {
+                "tag v$candidate 已存在，请先修改 version.properties 升版本；失败的 tag 流水线请直接重跑"
+            }
+            candidate
+        }
+        println("BOXLET_RELEASE_VERSION=$version")
+        println("BOXLET_RELEASE_TAG=v$version")
+        println("BOXLET_PRERELEASE=${boxletSuffix == "1"}")
+    }
+}

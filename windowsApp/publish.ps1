@@ -1,5 +1,5 @@
 # Build a portable x64 release with .NET, WinUI and an OpenJDK runtime.
-# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、git tag。
+# 版本由根 Gradle 配置统一解析：显式参数、BOXLET_VERSION、version.properties。
 param([string]$JavaHome, [string]$Version)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Resolve-Version.ps1')

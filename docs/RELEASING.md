@@ -1,11 +1,22 @@
 # 版本号与发布
 
-版本号只有**一个来源**：git tag。所有端、所有产物、GitHub Release 和 Telegram 通知
+版本号只有**一个来源**：根目录 [`version.properties`](../version.properties)。所有端、所有产物、GitHub Release 和 Telegram 通知
 都用同一个值，不再手改 `versionCode` / `packageVersion` / `AppVersion`。
 
 ## 1. 版本号规则
 
-tag 形式：`vMAJOR.MINOR.PATCH`，三段数字，每段 0–99。不使用第 4 段：
+与 Matter 相同，通过四个属性维护版本：
+
+```properties
+VERSION_MAJOR=1
+VERSION_MINOR=0
+VERSION_PATCH=0
+VERSION_SUFFIX=0
+```
+
+`VERSION_SUFFIX=0` 表示正式版；`1` 表示预发布。正式版 tag 为 `vMAJOR.MINOR.PATCH`，
+预发布 tag 为 `vMAJOR.MINOR.PATCH-beta.N`，序号由已有 tag 的最大值加一，首次为 `beta.1`。
+主、次、修订每段 0–99，不带前导零，且不能全为 0。不使用第 4 段：
 同一版本内的修订直接递增 patch，`1.2.99`（`10299`）之后就是 `1.3.0`（`10300`）。
 
 数值用**十进制拼接**，每段固定 2 位：
@@ -36,7 +47,7 @@ versionCode = major * 10_000 + minor * 100 + patch
 
 ### 开发构建
 
-不是精确打在 tag 上、或工作区有改动时，展示用的版本号会带后缀，
+本地始终从配置文件取基础版本。正式版配置下，不在对应 tag 上或工作区有改动时，展示用的版本号会带后缀，
 **数值版本号不变**：
 
 | 场景 | 展示版本 | versionCode |
@@ -44,9 +55,13 @@ versionCode = major * 10_000 + minor * 100 + patch
 | 干净地构建在 `v1.2.3` 上 | `1.2.3` | `10203` |
 | `v1.2.3` 之后 7 个提交 | `1.2.3-dev.7+ga1b2c3d` | `10203` |
 | 未提交的改动 | `1.2.3-dev.7+ga1b2c3d.dirty` | `10203` |
-| 仓库里还没有任何 `v*` tag | `0.1.0+g0efb21a` | `100` |
+| 配置 `1.2.3`，尚无对应 tag（共 7 个提交） | `1.2.3-dev.7+ga1b2c3d` | `10203` |
+| 配置 `1.2.3`、`VERSION_SUFFIX=1`，本地构建 | `1.2.3-beta.local` | `10203` |
+| 同一预发布配置，CI 已有 `v1.2.3-beta.2` | `1.2.3-beta.3` | `10203` |
 
-正式发布必须打在**干净的 tag** 上（工作区无改动），否则 Release 名称会带 `-dev` 后缀。
+Release workflow 计算好版本后，通过 `BOXLET_VERSION` 注入四端，不带本地开发后缀。
+这里只沿用 Matter 的配置文件与 beta 规则，**保留 Boxlet 的十进制 versionCode**，不改为提交数。
+同一基础版本的 beta 与正式版共用数值编号；需要更大的 Android `versionCode` 时必须递增主、次或修订号。
 
 ### 各端的映射
 
@@ -71,7 +86,8 @@ BOXLET_VERSION=1.2.3 ./gradlew :androidApp:assembleRelease
 ```
 
 版本号解析在根 [`build.gradle.kts`](../build.gradle.kts)：
-优先 `-PboxletVersion`，其次 `BOXLET_VERSION` 环境变量，最后 `git describe --tags --match 'v[0-9]*' --dirty`。
+优先 `-PboxletVersion`，其次 `BOXLET_VERSION` 环境变量，最后读取 `version.properties`。
+Git 只提供提交信息、开发后缀和已发布的 tag，不再决定基础版本。
 生成的 `dev.boxlet.core.BoxletBuild` 落在 `build/generated/boxlet/kotlin/`，由
 `:generateBoxletVersionSource` 负责，不要在源码里手写版本常量。
 
@@ -79,22 +95,26 @@ Windows 的 `run.ps1`、`publish.ps1` 与 `pack.ps1` 经 `Resolve-Version.ps1` �
 
 ## 3. 发布流程
 
-```bash
-# 1. 在 main 上确认工作区干净
-git status
+1. 修改 `version.properties`，修复递增 `VERSION_PATCH`，功能更新递增 `VERSION_MINOR`；
+2. 提交并推送到 GitHub；
+3. 打开 **Actions → Release → Run workflow**，选择对应分支并运行，无需填写版本号。
 
-# 2. 打 tag（附注 tag，建议写上这版改了什么）
-git tag -a v1.0.0 -m "Boxlet 1.0.0"
+构建成功后，流水线自动在本次源码提交上创建 tag 与 GitHub Release。
+正式版 tag 已存在时，在构建前失败并提示先升版本，不覆盖已发布版本。
+当前 GitHub 远端只有 `v0.0.1`，配置中的 `1.0.0` 可以作为下次正式版本。
+本地另有尚未推送的 `v1.0.0` tag，因此本地预览可能提示已存在；CI 以检出的远端 tag 为准。
 
-# 3. 推送 tag，触发 Release 流水线
-git push origin v1.0.0
-```
+预发布只需把 `VERSION_SUFFIX` 改为 `1`，同一入口会依次发布 `beta.1`、`beta.2` 等，
+GitHub Release 标记为 pre-release；发布正式版时改回 `0`。
+
+仍支持推送 tag 触发发布，但 tag 必须与该提交的 `version.properties` 基础版本和正式／预发布类型一致。
+失败的 tag 流水线可直接重跑，已存在的对应 Release 会替换同名产物。
 
 流水线（[`.github/workflows/release.yml`](../.github/workflows/release.yml)）：
 
-1. `prepare` 从 tag 得到版本号，并校验格式；
+1. `prepare` 检出完整历史，调用 `printBoxletReleaseVersion`，从配置计算版本并校验 tag；
 2. `android` / `windows` / `web` / `engine` 四路并行构建，全部带上同一个 `BOXLET_VERSION`；
-3. `release` 汇总产物，创建（或复用）`vX.Y.Z` 的 GitHub Release 并附上生成的更新说明；
+3. `release` 汇总产物，创建对应 tag 的 GitHub Release，并附上生成的更新说明；
 4. `notify` 把结果发到 Telegram。
 
 产物：
@@ -111,9 +131,8 @@ git push origin v1.0.0
 
 Windows ZIP 解压后从顶层 `Boxlet.exe` 启动，依赖、语言资源、引擎和运行时都在 `app/`，须完整保留。打包前可运行 `windowsApp/tests/LauncherSmoke.ps1`（PowerShell 7）验证移动目录、中文路径、参数转发和 `--exit`；CI 与 Release 的 Windows 构建已接入该检查。
 
-不打算发 Release 时可以先只打 tag 到本地验证。手动执行
-「Actions → Release → Run workflow」会实际构建并发布；若对应 tag 不存在，
-会在本次运行的源码提交上创建 tag，已存在的 Release 会上传替换同名产物。
+不打算发 Release 时，运行普通 CI 或本地构建即可。`printBoxletReleaseVersion` 只计算版本和校验 tag，
+不会创建 tag 或发布；手动执行「Actions → Release → Run workflow」会实际构建并发布。
 
 ## 4. 需要的仓库密钥
 
