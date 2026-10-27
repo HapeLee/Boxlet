@@ -766,7 +766,7 @@ class TransferEngine(
             file.bytes = bytes
             file.status = FileTransferStatus.COMPLETED
             updateIncomingFile(sessionId, fileId) {
-                it.copy(status = FileTransferStatus.COMPLETED, bytesTransferred = bytes)
+                it.copy(status = FileTransferStatus.COMPLETED, bytesTransferred = bytes, message = session.messageText)
             }
             _completions.emit(
                 ReceiveCompletion(

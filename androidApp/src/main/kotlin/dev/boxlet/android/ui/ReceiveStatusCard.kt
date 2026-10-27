@@ -21,6 +21,7 @@ internal fun ReceiveStatusCard(
     app: BoxletApp,
     state: UiState,
     onViewFiles: () -> Unit,
+    onViewMessage: () -> Unit,
 ) {
     val incoming = state.incoming
     val pending = state.pendingReceive
@@ -51,9 +52,12 @@ internal fun ReceiveStatusCard(
         ReceiveVisualState.Receiving, ReceiveVisualState.Completed -> MaterialTheme.colorScheme.primary
         ReceiveVisualState.Cancelled, ReceiveVisualState.Offline -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    // 文本消息不落盘，收完只能从界面里再次查看/复制，所以它的入口优先于「查看文件」。
+    val receivedMessage = completedFiles.firstOrNull { it.isMessage }?.message?.takeIf { it.isNotBlank() }
     val action = when {
         phase == ReceiveVisualState.Request -> ReceiveVisualState.Request
         phase == ReceiveVisualState.Offline -> ReceiveVisualState.Offline
+        receivedMessage != null -> ReceiveVisualState.Completed
         completedFiles.any { !it.savedPath.isNullOrBlank() } -> ReceiveVisualState.Completed
         else -> null
     }
@@ -118,7 +122,9 @@ internal fun ReceiveStatusCard(
                             Button(onClick = { app.acceptAllReceive() }) { Text("全部接收") }
                         }
                         ReceiveVisualState.Offline -> TextButton(onClick = { app.ensureRestarted() }) { Text("启动服务") }
-                        ReceiveVisualState.Completed -> TextButton(onClick = onViewFiles) { Text("查看文件") }
+                        ReceiveVisualState.Completed -> TextButton(
+                            onClick = if (receivedMessage != null) onViewMessage else onViewFiles,
+                        ) { Text(if (receivedMessage != null) "查看文本" else "查看文件") }
                         else -> Unit
                     }
                 }

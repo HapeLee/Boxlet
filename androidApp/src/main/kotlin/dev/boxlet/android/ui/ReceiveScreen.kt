@@ -32,8 +32,10 @@ import dev.boxlet.core.engine.FileTransferStatus
 import dev.boxlet.core.engine.TransferFileState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Message
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lock
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import dev.boxlet.android.ui.components.GlassPage
 import dev.boxlet.android.ui.components.IconBubble
@@ -84,6 +87,7 @@ fun ReceiveScreen(
     val settings = state.settings
     var pinDialog by remember { mutableStateOf(false) }
     var viewedFiles by remember { mutableStateOf<List<TransferFileState>?>(null) }
+    var viewedText by remember { mutableStateOf<ReceivedText?>(null) }
     var confirmClearHistory by remember { mutableStateOf(false) }
 
     GlassPage(
@@ -102,10 +106,19 @@ fun ReceiveScreen(
         },
     ) {
         item(key = "receive-status") {
-            ReceiveStatusCard(app, state, onViewFiles = {
-                viewedFiles = state.incoming?.files.orEmpty()
-                    .filter { it.status == FileTransferStatus.COMPLETED && !it.savedPath.isNullOrBlank() }
-            })
+            ReceiveStatusCard(
+                app,
+                state,
+                onViewFiles = {
+                    viewedFiles = state.incoming?.files.orEmpty()
+                        .filter { it.status == FileTransferStatus.COMPLETED && !it.savedPath.isNullOrBlank() }
+                },
+                onViewMessage = {
+                    viewedText = state.incoming?.files.orEmpty()
+                        .firstOrNull { it.isMessage && !it.message.isNullOrBlank() }
+                        ?.let { ReceivedText(textTitle(state.incoming?.peer?.alias), it.message.orEmpty()) }
+                },
+            )
         }
         state.incoming?.let { incoming ->
             item(key = "incoming-details") {
@@ -127,10 +140,12 @@ fun ReceiveScreen(
                     files = incoming.files,
                     onTogglePause = if (incoming.adapterId == "boxlet-bp2" && incoming.status in listOf(TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
                         ({ app.engine.setTransferPaused(false, incoming.status != TransferStatus.PAUSED) }) else null,
-                    footer = if (incoming.status == TransferStatus.COMPLETED) {
-                        "已保存到 ${settings.destination?.let(::formatDestination) ?: "下载/Boxlet"}"
-                    } else {
+                    footer = if (incoming.status != TransferStatus.COMPLETED) {
                         null
+                    } else if (incoming.files.any { it.isMessage }) {
+                        "文本不写入文件目录，可在下方接收记录中查看或复制"
+                    } else {
+                        "已保存到 ${settings.destination?.let(::formatDestination) ?: "下载/Boxlet"}"
                     },
                     onCancel = if (incoming.status == TransferStatus.TRANSFERRING || incoming.status == TransferStatus.PAUSED) {
                         { app.cancelReceive() }
@@ -202,7 +217,12 @@ fun ReceiveScreen(
                 HistoryRow(
                     modifier = Modifier.animateItem(),
                     entry = entry,
-                    onOpen = { openFile(context, entry.path, entry.fileType) },
+                    onOpen = {
+                        if (!openFile(context, entry.path, entry.fileType)) notifyOpenFailed(context)
+                    },
+                    onOpenText = {
+                        viewedText = ReceivedText(textTitle(entry.senderAlias), entry.fileName)
+                    },
                     onRemove = { app.removeHistory(entry.id) },
                 )
             }
@@ -218,14 +238,16 @@ fun ReceiveScreen(
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
                 Text("已接收的文件", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(8.dp))
-                Text("${received.size} 个文件 · 点击打开", style = MaterialTheme.typography.bodySmall,
+                Text("${received.size} 个文件 · 点击选择打开方式", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
                 LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 420.dp)) {
                     items(received, key = { it.id }) { file ->
                         Row(
                             modifier = Modifier.fillMaxWidth()
-                                .clickable { openFile(context, file.savedPath, file.mimeType) }
+                                .clickable {
+                                    if (!openFile(context, file.savedPath, file.mimeType)) notifyOpenFailed(context)
+                                }
                                 .padding(vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -244,6 +266,14 @@ fun ReceiveScreen(
                 TextButton(onClick = { viewedFiles = null }, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
             }
         }
+    }
+
+    viewedText?.let { received ->
+        ReceivedTextSheet(
+            title = received.title,
+            text = received.text,
+            onDismiss = { viewedText = null },
+        )
     }
 
     if (pinDialog) {
@@ -275,12 +305,23 @@ fun ReceiveScreen(
     }
 }
 
-/** 一条接收记录：点整行打开已保存的文件，右侧删除只删记录。 */
+/** 一条接收记录：文件点整行打开，文本点整行查看（可再次选中/复制），右侧删除只删记录。 */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onRemove: () -> Unit, modifier: Modifier = Modifier) {
+private fun HistoryRow(
+    entry: HistoryEntry,
+    onOpen: () -> Unit,
+    onOpenText: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
     MatterCardPadded(
         modifier = modifier.fillMaxWidth(),
-        onClick = if (!entry.isMessage && entry.path != null) onOpen else null,
+        onClick = when {
+            entry.isMessage -> onOpenText
+            entry.path != null -> onOpen
+            else -> null
+        },
         contentPadding = PaddingValues(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -319,6 +360,20 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onRemove: () -> 
                     }
                 }
             }
+            if (entry.isMessage) {
+                IconButton(onClick = {
+                    if (copyToClipboard(context, entry.fileName)) {
+                        Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                    }
+                }) {
+                    Icon(
+                        Icons.Rounded.ContentCopy,
+                        contentDescription = "复制文本",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             IconButton(onClick = onRemove) {
                 Icon(
                     Icons.Rounded.Delete,
@@ -330,6 +385,57 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onRemove: () -> 
         }
     }
 }
+
+/** 接收到的文本消息：不落盘，只在记录里留一份，随时可以再次打开选中/复制。 */
+private data class ReceivedText(val title: String, val text: String)
+
+private fun textTitle(senderAlias: String?): String =
+    senderAlias?.takeIf { it.isNotBlank() }?.let { "来自 $it 的文本" } ?: "接收到的文本"
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReceivedTextSheet(title: String, text: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var copied by remember(text) { mutableStateOf(false) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "长按可选择文本 · 仅保存在接收记录中，不会写入文件目录",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 420.dp)) {
+                item {
+                    SelectionContainer {
+                        Text(text, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                TextButton(onClick = onDismiss) { Text("关闭") }
+                Button(onClick = { copied = copyToClipboard(context, text) }) {
+                    Icon(
+                        Icons.Rounded.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (copied) "已复制" else "复制")
+                }
+            }
+        }
+    }
+}
+
+private fun notifyOpenFailed(context: android.content.Context) =
+    Toast.makeText(context, "没有可以打开此文件的应用", Toast.LENGTH_SHORT).show()
 
 /** 自动接收的三档；与引擎的 `quickSave || (quickSaveFromFavorites && 是收藏)` 一一对应。 */
 private enum class AutoReceiveMode { OFF, FAVORITES, ALL }

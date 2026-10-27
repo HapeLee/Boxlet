@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -41,6 +42,7 @@ import dev.boxlet.core.protocol.Protocol
 import dev.boxlet.shared.BoxletApp
 import dev.boxlet.shared.ThemeMode
 import dev.boxlet.shared.UiState
+import dev.boxlet.shared.repository.HistoryEntry
 import kotlinx.coroutines.delay
 import io.github.composefluent.ExperimentalFluentApi
 import io.github.composefluent.FluentTheme
@@ -460,6 +462,7 @@ private fun ReceivePage(app: BoxletApp, state: UiState) {
 
 @Composable
 private fun HistoryPage(app: BoxletApp, state: UiState) {
+    var openedMessage by remember { mutableStateOf<HistoryEntry?>(null) }
     PageLayout(
         title = "历史",
         subtitle = "最近接收的文件与消息",
@@ -481,8 +484,11 @@ private fun HistoryPage(app: BoxletApp, state: UiState) {
             items(state.history, key = { it.id }) { entry ->
                 Card(
                     onClick = {
-                        if (!entry.isMessage && entry.path != null) {
-                            runCatching { Desktop.getDesktop().open(File(entry.path)) }
+                        when {
+                            // 文本消息不落盘，点击是再次查看/复制，不能当文件打开。
+                            entry.isMessage -> openedMessage = entry
+                            entry.path != null -> runCatching { Desktop.getDesktop().open(File(entry.path)) }
+                            else -> Unit
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -507,6 +513,9 @@ private fun HistoryPage(app: BoxletApp, state: UiState) {
                                 color = FluentTheme.colors.text.text.secondary,
                             )
                         }
+                        if (entry.isMessage) {
+                            Button(onClick = { copyToSystemClipboard(entry.fileName) }) { Text("复制") }
+                        }
                         Button(onClick = { app.removeHistory(entry.id) }, iconOnly = true) {
                             Icon(Icons.Filled.Delete, "删除", Modifier.size(16.dp))
                         }
@@ -515,7 +524,33 @@ private fun HistoryPage(app: BoxletApp, state: UiState) {
             }
         }
     }
+
+    openedMessage?.let { entry ->
+        ContentDialog(
+            title = "来自 ${entry.senderAlias} 的文本",
+            visible = true,
+            content = {
+                SelectionContainer {
+                    Text(
+                        entry.fileName,
+                        style = FluentTheme.typography.body,
+                    )
+                }
+            },
+            primaryButtonText = "复制",
+            closeButtonText = "关闭",
+            onButtonClick = { button ->
+                if (button == ContentDialogButton.Primary) copyToSystemClipboard(entry.fileName)
+                openedMessage = null
+            },
+        )
+    }
 }
+
+private fun copyToSystemClipboard(text: String): Boolean = runCatching {
+    java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(java.awt.datatransfer.StringSelection(text), null)
+    true
+}.getOrDefault(false)
 
 @Composable
 private fun SettingsPage(app: BoxletApp, state: UiState) {

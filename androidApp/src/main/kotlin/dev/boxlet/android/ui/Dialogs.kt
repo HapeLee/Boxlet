@@ -35,6 +35,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalContext
 import dev.boxlet.core.engine.PendingReceive
 import dev.boxlet.shared.PinRequest
 
@@ -74,10 +78,17 @@ fun ReceiveRequestSheet(
 
             if (request.isMessage && request.message != null) {
                 val message = request.message.orEmpty()
+                val context = LocalContext.current
                 Row(verticalAlignment = Alignment.Top) {
                     Icon(Icons.AutoMirrored.Rounded.Message, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(message, style = MaterialTheme.typography.bodyLarge)
+                    // 文本不落盘，接收前也要能先选中/复制，避免确认后无处可查。
+                    SelectionContainer(Modifier.weight(1f)) {
+                        Text(message, style = MaterialTheme.typography.bodyLarge)
+                    }
+                    IconButton(onClick = { copyToClipboard(context, message) }) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = "复制文本", modifier = Modifier.size(20.dp))
+                    }
                 }
             } else {
                 LazyColumn(Modifier.weight(1f, fill = false)) {

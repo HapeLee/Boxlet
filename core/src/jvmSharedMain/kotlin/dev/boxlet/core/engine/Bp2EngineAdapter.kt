@@ -481,7 +481,8 @@ internal class Bp2EngineAdapter(
         override suspend fun onReceived(peer: Bp2Peer, transferId: String, entry: Bp2Entry) {
             val result = published.remove("$transferId:${entry.fileId}") ?: error("Missing publication result")
             incomingView?.takeIf { it.id == transferId }?.update(entry.fileId) {
-                it.copy(status = FileTransferStatus.COMPLETED, bytesTransferred = Bp2.decimal(entry.size), savedPath = result.path)
+                it.copy(status = FileTransferStatus.COMPLETED, bytesTransferred = Bp2.decimal(entry.size),
+                    savedPath = result.path, message = result.message)
             }
             onCompletion(ReceiveCompletion(transferId, peer.hello.alias, entry.dto().copy(preview = result.message), result.path,
                 result.message, timestamp = result.timestamp ?: System.currentTimeMillis(), adapterId = "boxlet-bp2",

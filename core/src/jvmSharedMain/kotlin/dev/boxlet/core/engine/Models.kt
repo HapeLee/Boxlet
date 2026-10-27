@@ -75,6 +75,11 @@ data class TransferFileState(
     val isMessage: Boolean = false,
     val savedPath: String? = null,
     val restartRequired: Boolean = false,
+    /**
+     * 文本消息正文，只在 [isMessage] 为 true 时有值。
+     * 这类内容不落盘（[savedPath] 恒为 null），只能从界面里选中/复制，因此正文必须随状态一起公开。
+     */
+    val message: String? = null,
 )
 
 data class OutgoingTransfer(

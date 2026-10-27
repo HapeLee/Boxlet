@@ -1,9 +1,12 @@
 package dev.boxlet.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import dev.boxlet.core.engine.OutgoingFile
@@ -55,21 +58,59 @@ fun formatDestination(raw: String): String {
     return tail.substringAfter(':', tail).ifBlank { decoded }
 }
 
-fun openFile(context: Context, path: String?, mimeType: String) {
-    if (path.isNullOrBlank()) return
-    runCatching {
-        val uri = if (path.startsWith("content://")) {
-            Uri.parse(path)
-        } else {
-            FileProvider.getUriForFile(context, "${context.packageName}.files", File(path))
-        }
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mimeType.ifBlank { "*/*" })
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-    }
+/**
+ * 打开已接收的文件：始终走系统的「打开方式」选择器，不让某个默认应用直接接管
+ * （apk、mp4 这类常见类型默认应用往往不是用户想要的）。
+ * @return 是否成功拉起选择器；失败时调用方负责提示。
+ */
+fun openFile(context: Context, path: String?, mimeType: String): Boolean {
+    if (path.isNullOrBlank()) return false
+    val uri = runCatching { fileUri(context, path) }.getOrNull() ?: return false
+    // 精确 MIME 找不到接收方时（例如协议里填的是 application/octet-stream）退化为 */*，
+    // 让用户自己从「文件管理器 / 安装包安装程序」里选。
+    return startViewer(context, uri, resolveMimeType(path, mimeType)) || startViewer(context, uri, "*/*")
 }
+
+private fun fileUri(context: Context, path: String): Uri =
+    if (path.startsWith("content://")) {
+        Uri.parse(path)
+    } else {
+        FileProvider.getUriForFile(context, "${context.packageName}.files", File(path))
+    }
+
+private fun startViewer(context: Context, uri: Uri, mime: String): Boolean {
+    val target = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mime)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooser = Intent.createChooser(target, "选择打开方式").apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return runCatching {
+        context.startActivity(chooser)
+        true
+    }.getOrDefault(false)
+}
+
+/**
+ * 协议里带的 MIME 常常是 `application/octet-stream` 或干脆为空，直接丢给系统会匹配不到应用，
+ * 因此按扩展名补一次推断（apk、mp4 等本地常见类型都靠这一步）。
+ */
+fun resolveMimeType(path: String, declared: String): String {
+    val normalized = declared.substringBefore(';').trim()
+    val usable = normalized.takeIf { it.isNotBlank() && it != "*/*" && it != "application/octet-stream" }
+    if (usable != null) return usable
+    val extension = path.substringAfterLast('/').substringAfterLast('.', "")
+        .takeIf { it.length in 1..8 && it.all(Char::isLetterOrDigit) } ?: return "*/*"
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase(Locale.US)) ?: "*/*"
+}
+
+/** 复制文本到系统剪贴板；返回是否成功，供界面切换按钮文案。 */
+fun copyToClipboard(context: Context, text: String, label: String = "Boxlet 文本"): Boolean = runCatching {
+    val manager = context.getSystemService(ClipboardManager::class.java) ?: return false
+    manager.setPrimaryClip(ClipData.newPlainText(label, text))
+    true
+}.getOrDefault(false)
 
 fun contentUriToOutgoingFile(context: Context, uri: Uri): OutgoingFile? {
     val resolver = context.contentResolver
