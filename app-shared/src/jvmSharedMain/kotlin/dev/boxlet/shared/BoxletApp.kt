@@ -1,6 +1,7 @@
 package dev.boxlet.shared
 
 import dev.boxlet.core.engine.EngineConfig
+import dev.boxlet.core.engine.FileTransferStatus
 import dev.boxlet.core.engine.OutgoingFile
 import dev.boxlet.core.engine.PendingReceive
 import dev.boxlet.core.engine.ReceiveStorage
@@ -21,6 +22,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -77,6 +79,9 @@ class BoxletApp(
     // 发送草稿属于应用会话，切换页面不会丢失；选择内容本身不会触发网络传输。
     private val _sendSelection = MutableStateFlow<List<OutgoingFile>>(emptyList())
     val sendSelection: StateFlow<List<OutgoingFile>> = _sendSelection.asStateFlow()
+
+    // 正在通过浏览器分享的那批内容：会话期间必须一直可下载，结束后才移出箱子。
+    private val _sharedViaBrowser = MutableStateFlow<Set<String>>(emptySet())
 
     fun selectFiles(files: List<OutgoingFile>) {
         _sendSelection.update { it + files }
@@ -155,8 +160,35 @@ class BoxletApp(
                 )
             }
         }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { dropSentFromDraft() }
         engine.start()
         _ready.value = true
+    }
+
+    /**
+     * 一次发送结束后，把确实发出去的内容移出箱子：留在箱子里，下一次发送会把它们再带一遍。
+     *
+     * 只移除逐文件状态为完成的那几项，失败/被跳过/被拒绝的保留下来，方便改发别的设备或重发。
+     * 按 sessionId 去重，一个会话只处理一次；[engine] 自带的临时内容（例如无头引擎的 send.text）
+     * 不在箱子里，按 id 过滤时自然什么都不动。
+     */
+    private suspend fun dropSentFromDraft() {
+        var handledSession: String? = null
+        engine.state.collect { state ->
+            val outgoing = state.outgoing ?: return@collect
+            if (outgoing.sessionId == handledSession) return@collect
+            if (outgoing.status !in SETTLED_SEND_STATUSES) return@collect
+            handledSession = outgoing.sessionId
+            val completed = outgoing.files.filter { it.status == FileTransferStatus.COMPLETED }.map { it.id }.toSet()
+            val sent = when {
+                completed.isNotEmpty() -> completed
+                // 对方已有这些文件（204）时没有逐文件状态，整体完成就整体移出
+                outgoing.status == TransferStatus.COMPLETED -> outgoing.files.map { it.id }.toSet()
+                else -> return@collect
+            }
+            if (sent.isEmpty()) return@collect
+            _sendSelection.update { files -> files.filterNot { it.id in sent } }
+        }
     }
 
     private fun engineConfig(): EngineConfig {
@@ -262,11 +294,20 @@ class BoxletApp(
     /**
      * 通过浏览器分享。PIN 直接复用设置里的接收 PIN：没有设置就不校验，
      * 因为分享本身就是“我要把文件给别人”的主动动作。
+     *
+     * 分享期间文件要一直能被下载，所以先记下这批 id，会话结束（[stopShare]）时才移出箱子。
      */
-    fun shareFiles(files: List<OutgoingFile>): dev.boxlet.core.engine.ShareState? =
-        engine.startShare(files, settingsRepository.state.value.receivePin)
+    fun shareFiles(files: List<OutgoingFile>): dev.boxlet.core.engine.ShareState? {
+        val share = engine.startShare(files, settingsRepository.state.value.receivePin) ?: return null
+        _sharedViaBrowser.value = files.map { it.id }.toSet()
+        return share
+    }
 
-    fun stopShare() = engine.stopShare()
+    fun stopShare() {
+        engine.stopShare()
+        val ids = _sharedViaBrowser.getAndUpdate { emptySet() }
+        if (ids.isNotEmpty()) _sendSelection.update { files -> files.filterNot { it.id in ids } }
+    }
 
     /** 打开 SP/1 浏览器接入点，配对码默认复用接收 PIN。 */
     fun startBridge(port: Int = 0, pairCode: String? = null): dev.boxlet.core.engine.BridgeState? =
@@ -324,4 +365,13 @@ class BoxletApp(
                 status == TransferStatus.PAUSED ||
                 status == TransferStatus.PIN_REQUIRED
         }
+
+    private companion object {
+        /** 一次发送已经结束的状态；到这一步才能判断哪些文件算发出去了。 */
+        val SETTLED_SEND_STATUSES = setOf(
+            TransferStatus.COMPLETED,
+            TransferStatus.FAILED,
+            TransferStatus.CANCELLED,
+        )
+    }
 }
