@@ -51,6 +51,9 @@ private val navItems = listOf(
     LiquidNavItem("设置", Icons.Outlined.Settings, Icons.Filled.Settings),
 )
 
+/** 接收页在 [navItems] 里的下标。 */
+private const val RECEIVE_PAGE = 1
+
 /**
  * 主框架：三个 Tab 的横向分页 + 内容区之上的悬浮底栏层。
  *
@@ -65,6 +68,8 @@ fun MainTabsScreen(
     app: BoxletApp,
     state: UiState,
     snackbar: SnackbarHostState,
+    /** 每次自增表示「跳到接收页」一次；0 表示还没有这个请求。 */
+    navigateToReceive: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -74,6 +79,11 @@ fun MainTabsScreen(
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { navItems.size })
     // 重建时对齐完整页面，避免恢复分页动画中途的偏移。
     LaunchedEffect(pagerState) { pagerState.scrollToPage(pagerState.currentPage) }
+
+    // 确认接收之后切到接收页，用户不用自己再滑一次
+    LaunchedEffect(navigateToReceive) {
+        if (navigateToReceive > 0) pagerState.animateScrollToPage(RECEIVE_PAGE)
+    }
 
     // 每页一份列表状态：顶栏联动与"滑到顶部立即显示底栏"都要读它
     val sendListState = remember { LazyListState() }
@@ -164,7 +174,7 @@ fun MainTabsScreen(
                     onBrowserShare = { shareSelected() },
                 )
 
-                1 -> ReceiveScreen(
+                RECEIVE_PAGE -> ReceiveScreen(
                     app = app,
                     state = state,
                     listState = receiveListState,

@@ -134,7 +134,8 @@ fun DesktopRoot(
                 },
             )
 
-            PendingReceiveDialog(app, state)
+            // 确认接收后切到接收页，进度和已存文件都在那一页
+            PendingReceiveDialog(app, state, onAccepted = { page = Page.Receive })
             PinDialog(app, state)
         }
 }
@@ -894,7 +895,7 @@ private fun TransferCard(
 }
 
 @Composable
-private fun PendingReceiveDialog(app: BoxletApp, state: UiState) {
+private fun PendingReceiveDialog(app: BoxletApp, state: UiState, onAccepted: () -> Unit) {
     val request = state.pendingReceive ?: return
     ContentDialog(
         title = "来自 ${request.peer.alias} 的传输请求",
@@ -918,7 +919,12 @@ private fun PendingReceiveDialog(app: BoxletApp, state: UiState) {
         primaryButtonText = "全部接收",
         secondaryButtonText = "拒绝",
         onButtonClick = { button ->
-            if (button == ContentDialogButton.Primary) app.acceptAllReceive() else app.rejectReceive()
+            if (button == ContentDialogButton.Primary) {
+                app.acceptAllReceive()
+                onAccepted()
+            } else {
+                app.rejectReceive()
+            }
         },
     )
 }
