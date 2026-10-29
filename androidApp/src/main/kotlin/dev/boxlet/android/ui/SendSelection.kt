@@ -54,6 +54,17 @@ private data class ShareApp(val label: String, val packageName: String, val path
 /** 卡片里最多摊开多少项；更多的走「查看全部」，否则一个文件夹就能把页面顶满。 */
 private const val INLINE_ITEM_LIMIT = 8
 
+/** 安装包的 MIME，接收端靠它识别「这是一个可以直接安装的 APK」。 */
+private const val APK_MIME = "application/vnd.android.package-archive"
+
+/**
+ * 分享出去的安装包文件名：主包 `<包名>.apk`，分包 `<包名>-<原名>.apk`。
+ * 不再包一层 `<包名>/` 目录——接收端拿到就是能直接点的单个文件，
+ * 不会变成只装着一个 base.apk、看不出是哪个应用的文件夹。
+ */
+private fun apkFileName(packageName: String, sourceName: String, isBase: Boolean): String =
+    if (isBase) "$packageName.apk" else "$packageName-$sourceName"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SendSelectionPanel(app: BoxletApp, modifier: Modifier = Modifier) {
@@ -347,10 +358,17 @@ fun SendSelectionPanel(app: BoxletApp, modifier: Modifier = Modifier) {
                             try {
                                 val selected = withContext(Dispatchers.IO) {
                                     chosen.flatMap { entry ->
-                                        entry.paths.map { path ->
+                                        // 第 0 个是主包（sourceDir），其余是分包，都在同一个目录层级里摊平
+                                        entry.paths.mapIndexed { index, path ->
                                             val file = File(path)
                                             check(file.isFile && file.canRead())
-                                            OutgoingFile(UUID.randomUUID().toString(), "${entry.packageName}/${file.name}", file.length(), "application/vnd.android.package-archive", openSource = { file.source() })
+                                            OutgoingFile(
+                                                id = UUID.randomUUID().toString(),
+                                                fileName = apkFileName(entry.packageName, file.name, index == 0),
+                                                size = file.length(),
+                                                mimeType = APK_MIME,
+                                                openSource = { file.source() },
+                                            )
                                         }
                                     }
                                 }
@@ -482,7 +500,7 @@ private fun fileIcon(file: OutgoingFile): ImageVector = when {
     file.mimeType.startsWith("image/") -> Icons.Rounded.Image
     file.mimeType.startsWith("video/") -> Icons.Rounded.Movie
     file.mimeType.startsWith("audio/") -> Icons.Rounded.Audiotrack
-    file.mimeType == "application/vnd.android.package-archive" ||
+    file.mimeType == APK_MIME ||
         file.fileName.endsWith(".apk", ignoreCase = true) -> Icons.Rounded.Android
     file.mimeType.startsWith("text/") -> Icons.Rounded.Description
     else -> Icons.AutoMirrored.Rounded.InsertDriveFile

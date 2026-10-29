@@ -44,13 +44,33 @@ class AndroidReceiveStorage(
         file: FileDto,
         senderAlias: String,
     ): ReceiveDestination = withContext(Dispatchers.IO) {
+        // 老发送方会把安装包放在 `<包名>/` 目录里，先摊平成 `<包名>.apk`，再决定落到哪里
+        val target = flattenApk(file)
         val tree = destinationUri()?.takeIf { it.startsWith("content://") }
         if (tree != null) {
-            safDestination(tree, file)?.let { return@withContext it }
+            safDestination(tree, target)?.let { return@withContext it }
         } else {
-            mediaStoreDestination(file)?.let { return@withContext it }
+            mediaStoreDestination(target)?.let { return@withContext it }
         }
-        appStorage.createDestination(sessionId, file, senderAlias)
+        appStorage.createDestination(sessionId, target, senderAlias)
+    }
+
+    /**
+     * 安装包不套目录：`<包名>/base.apk` → `<包名>.apk`，分包 → `<包名>-split_xxx.apk`。
+     * 只装着一个 base.apk 的文件夹既不能直接安装，也认不出是哪个应用。
+     *
+     * 口径收得很窄：只有一级目录、目录名是包名、末级确实是 apk 时才改名，
+     * 普通文件夹里的 apk（例如用户自己发的 `安装包/微信.apk`）保持原样。
+     */
+    private fun flattenApk(file: FileDto): FileDto {
+        val segments = file.fileName.split('/', '\\').filter { it.isNotBlank() && it != "." && it != ".." }
+        if (segments.size != 2) return file
+        val directory = segments[0]
+        val leaf = segments[1]
+        if (!leaf.endsWith(".apk", ignoreCase = true)) return file
+        if (!PACKAGE_NAME.matches(directory)) return file
+        val name = if (leaf.equals("base.apk", ignoreCase = true)) "$directory.apk" else "$directory-$leaf"
+        return file.copy(fileName = name)
     }
 
     private fun mediaStoreDestination(file: FileDto): ReceiveDestination? {
@@ -150,5 +170,7 @@ class AndroidReceiveStorage(
         const val FOLDER = "Boxlet"
         const val WRITE_BUFFER_BYTES = 1024 * 1024
         const val PART_SUFFIX = ".part"
+        /** 包名：至少两段，每段以字母开头。 */
+        val PACKAGE_NAME = Regex("""[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+""")
     }
 }
